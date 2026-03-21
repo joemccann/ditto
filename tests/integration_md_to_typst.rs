@@ -578,3 +578,272 @@ fn fixture_tables_converts_without_error() {
     assert!(src.contains("#table("), "got:\n{src}");
     assert!(src.contains("align: center"), "got:\n{src}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — nested lists
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn nested_bullet_three_levels_clean() {
+    let src = convert("- Top\n  - Mid\n    - Deep\n");
+    assert!(src.contains("- Top"), "top level: {src}");
+    assert!(src.contains("  - Mid"), "mid level: {src}");
+    assert!(src.contains("    - Deep"), "deep level: {src}");
+    // No blank line between parent item and its nested list
+    assert!(
+        !src.contains("Top\n\n  - Mid"),
+        "spurious blank line before nested items: {src}"
+    );
+}
+
+#[test]
+fn nested_mixed_bullet_and_ordered() {
+    let src = convert("- Category\n  1. Sub one\n  2. Sub two\n");
+    assert!(src.contains("- Category"), "bullet parent: {src}");
+    assert!(src.contains("  + Sub one") || src.contains("  + Sub"), "ordered child: {src}");
+}
+
+#[test]
+fn nested_ordered_sublist_clean() {
+    let src = convert("1. Alpha\n2. Beta\n   1. Sub-beta-one\n   2. Sub-beta-two\n3. Gamma\n");
+    assert!(src.contains("+ Alpha"), "alpha: {src}");
+    assert!(src.contains("+ Beta"), "beta: {src}");
+    assert!(src.contains("  + Sub-beta-one") || src.contains("+ Sub-beta-one"), "sub: {src}");
+    assert!(src.contains("+ Gamma"), "gamma: {src}");
+    // No blank line between 'Beta' and its nested list
+    assert!(
+        !src.contains("Beta\n\n  + Sub"),
+        "blank line before nested ordered: {src}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — ordered list start numbering
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn ordered_list_default_start_one_no_set_enum() {
+    // Lists starting at 1 should NOT emit a #set enum(start:) directive
+    let src = convert("1. First\n2. Second\n3. Third\n");
+    assert!(!src.contains("set enum(start:)"), "start:1 should not emit set enum: {src}");
+    assert!(src.contains("+ First"), "items present: {src}");
+}
+
+#[test]
+fn ordered_list_start_at_5() {
+    let src = convert("5. Five\n6. Six\n7. Seven\n");
+    assert!(
+        src.contains("start: 5") || src.contains("start:5"),
+        "expected start:5 directive: {src}"
+    );
+    assert!(src.contains("+ Five"), "item text: {src}");
+}
+
+#[test]
+fn ordered_list_start_at_1_explicit() {
+    // `1. First` explicitly = start 1; should not wrap in block
+    let src = convert("1. One\n2. Two\n");
+    assert!(!src.contains("#block[\n#set enum"), "no wrapper for start=1: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — task list layout
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn task_list_uses_box_checkbox() {
+    let src = convert("- [x] Alpha\n- [ ] Beta\n");
+    // Checkbox is an inline #box(width: 1em)[…]
+    assert!(src.contains("#box(width: 1em)[☑]"), "checked: {src}");
+    assert!(src.contains("#box(width: 1em)[☐]"), "unchecked: {src}");
+}
+
+#[test]
+fn task_list_no_double_space_before_text() {
+    // The old rendering emitted `- ☑  text` (double space); now it must be single
+    let src = convert("- [x] Item text\n");
+    // Should contain `[☑] Item text` without double space
+    assert!(
+        src.contains("[☑] Item text"),
+        "single space after checkbox: {src}"
+    );
+    assert!(
+        !src.contains("[☑]  Item text"),
+        "no double space after checkbox: {src}"
+    );
+}
+
+#[test]
+fn nested_task_list_indented_correctly() {
+    let src = convert("- [x] Parent\n  - [ ] Child\n");
+    assert!(src.contains("- #box(width: 1em)[☑] Parent"), "parent: {src}");
+    assert!(
+        src.contains("  - #box(width: 1em)[☐] Child"),
+        "indented child task: {src}"
+    );
+    // No blank line between parent and nested task
+    assert!(
+        !src.contains("Parent\n\n  - "),
+        "blank line before nested task: {src}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — table alignment markers
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn table_header_cells_bolded_directly() {
+    // Header cells must use #strong[…] directly in the cell content, not via
+    // fragile string replacement of )[
+    let src = convert("| H1 | H2 |\n|----|----|\n| d1 | d2 |\n");
+    assert!(src.contains("table.cell(align: left)[#strong[H1]]"), "header cell: {src}");
+    assert!(src.contains("table.cell(align: left)[#strong[H2]]"), "header cell: {src}");
+    // Data cells must NOT be bold
+    assert!(src.contains("table.cell(align: left)[d1]"), "data cell: {src}");
+}
+
+#[test]
+fn table_all_three_alignments() {
+    let src = convert("| L | C | R |\n|:--|:-:|--:|\n| a | b | c |\n");
+    // Header row
+    assert!(src.contains("table.cell(align: left)[#strong[L]]"), "left header: {src}");
+    assert!(src.contains("table.cell(align: center)[#strong[C]]"), "center header: {src}");
+    assert!(src.contains("table.cell(align: right)[#strong[R]]"), "right header: {src}");
+    // Data row
+    assert!(src.contains("table.cell(align: left)[a]"), "left data: {src}");
+    assert!(src.contains("table.cell(align: center)[b]"), "center data: {src}");
+    assert!(src.contains("table.cell(align: right)[c]"), "right data: {src}");
+}
+
+#[test]
+fn table_no_alignment_defaults_to_left() {
+    let src = convert("| A | B |\n|---|---|\n| 1 | 2 |\n");
+    // Without alignment markers, all cells default to left
+    assert!(src.contains("align: left"), "default left: {src}");
+    assert!(!src.contains("align: right"), "no right without marker: {src}");
+    assert!(!src.contains("align: center"), "no center without marker: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — autolinks
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn bare_url_autolink_compact_form() {
+    // comrak's autolink extension: bare `https://…` in text → Link node where label == url
+    let src = convert("Go to https://example.com today.\n");
+    // Compact form: #link("url") without a separate label
+    assert!(src.contains("#link(\"https://example.com\")"), "compact autolink: {src}");
+}
+
+#[test]
+fn angle_bracket_url_autolink() {
+    let src = convert("See <https://rust-lang.org>.\n");
+    assert!(src.contains("#link("), "link call: {src}");
+    assert!(src.contains("rust-lang.org"), "URL in output: {src}");
+}
+
+#[test]
+fn email_autolink_uses_mailto() {
+    let src = convert("Mail to <hello@example.com>.\n");
+    assert!(src.contains("mailto:hello@example.com"), "mailto: {src}");
+    // @ in display label must be escaped
+    assert!(src.contains("hello\\@example.com"), "escaped @: {src}");
+}
+
+#[test]
+fn explicit_link_keeps_label() {
+    let src = convert("[GitHub](https://github.com)\n");
+    assert!(
+        src.contains("#link(\"https://github.com\", [GitHub])"),
+        "explicit label retained: {src}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — footnotes
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn footnote_single_reference_and_definition() {
+    let src = convert("Text[^note].\n\n[^note]: The note body.\n");
+    assert!(src.contains("#super[1]"), "superscript: {src}");
+    assert!(src.contains("The note body."), "body: {src}");
+    assert!(src.contains("#line(length: 100%)"), "separator: {src}");
+}
+
+#[test]
+fn footnote_two_in_document_order() {
+    // [^a] is referenced first, [^b] second.
+    let src = convert("First[^a] and second[^b].\n\n[^a]: Alpha.\n\n[^b]: Beta.\n");
+    let pos_super1 = src.find("#super[1]").expect("super[1] missing");
+    let pos_super2 = src.find("#super[2]").expect("super[2] missing");
+    // In-text references: 1 comes before 2
+    assert!(pos_super1 < pos_super2, "super[1] should precede super[2]: {src}");
+    // Definitions section: Alpha (first-referenced) before Beta
+    let footer = src.split("#line(length: 100%)").nth(1).unwrap_or("");
+    assert!(footer.contains("Alpha."), "Alpha in footer: {src}");
+    assert!(footer.contains("Beta."), "Beta in footer: {src}");
+    let alpha_pos = footer.find("Alpha.").unwrap();
+    let beta_pos = footer.find("Beta.").unwrap();
+    assert!(alpha_pos < beta_pos, "Alpha should come before Beta in footnote section: {src}");
+}
+
+#[test]
+fn footnote_definition_before_reference_still_ordered() {
+    // Definition appears before its reference in source — footnotes still ordered
+    // by first reference in text, not by definition source position.
+    let src = convert("[^z]: Zeta definition.\n\nText[^z] here.\n");
+    assert!(src.contains("#super[1]"), "super[1]: {src}");
+    assert!(src.contains("Zeta definition."), "body: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fidelity — definition lists
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn definition_list_single_term_single_detail() {
+    let src = convert("Term\n: Detail.\n");
+    assert!(src.contains("#strong[Term]"), "term: {src}");
+    assert!(src.contains("#pad(left: 1.5em)[Detail.]"), "detail: {src}");
+}
+
+#[test]
+fn definition_list_single_term_two_details() {
+    let src = convert("Term\n: First.\n: Second.\n");
+    assert!(src.contains("#strong[Term]"), "term: {src}");
+    assert!(src.contains("First."), "first: {src}");
+    assert!(src.contains("Second."), "second: {src}");
+    let pads = src.matches("#pad(left: 1.5em)").count();
+    assert!(pads >= 2, "both details padded ({pads} pads): {src}");
+}
+
+#[test]
+fn definition_list_two_separate_entries() {
+    let src = convert("Alpha\n: Def of alpha.\n\nBeta\n: Def of beta.\n");
+    assert!(src.contains("#strong[Alpha]"), "Alpha: {src}");
+    assert!(src.contains("#strong[Beta]"), "Beta: {src}");
+    assert!(src.contains("Def of alpha."), "alpha body: {src}");
+    assert!(src.contains("Def of beta."), "beta body: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM fixture file round-trip
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn gfm_fixture_converts_without_error() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gfm-fixture.md");
+    let md = std::fs::read_to_string(path).expect("gfm-fixture.md must exist");
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst(&md, &cfg(&dir)).unwrap();
+    assert!(!src.is_empty(), "GFM fixture should produce non-empty output");
+    // All major sections present
+    assert!(src.contains("#table("), "table: {src}");
+    assert!(src.contains("#box(width: 1em)"), "task list: {src}");
+    assert!(src.contains("#link("), "autolink: {src}");
+    assert!(src.contains("#line(length: 100%)"), "footnote section: {src}");
+    assert!(src.contains("#pad(left: 1.5em)"), "definition list: {src}");
+}

@@ -1,12 +1,12 @@
 # GFM Fidelity Test Fixture
 
-This document exercises every improved GFM feature.
+This document exercises every improved GFM feature in a single renderable file.
 
 ---
 
 ## Nested Lists
 
-### Bullet nesting
+### Bullet nesting (3 levels)
 
 - Top-level item A
   - Second-level item B
@@ -59,7 +59,7 @@ This document exercises every improved GFM feature.
 | Carol       |   77    |  C+   |
 | Dave        |  100    |  A+   |
 
-Table without explicit alignment:
+Table without explicit alignment (defaults to left):
 
 | Foo | Bar | Baz |
 |-----|-----|-----|
@@ -69,13 +69,13 @@ Table without explicit alignment:
 
 ## Autolinks
 
-Plain autolink: https://example.com
+Plain URL autolink: https://example.com
 
-Angle-bracket autolink: <https://www.rust-lang.org>
+Angle-bracket URL autolink: <https://www.rust-lang.org>
 
 Email autolink: <user@example.com>
 
-Explicit link (should keep label): [GitHub](https://github.com)
+Explicit link (label differs from URL): [GitHub](https://github.com)
 
 ---
 
@@ -84,6 +84,8 @@ Explicit link (should keep label): [GitHub](https://github.com)
 Markdown was invented by John Gruber.[^gruber]
 
 Typst is a new typesetting system.[^typst]
+
+Both footnote references appear in text; definitions are collected below.
 
 [^gruber]: John Gruber created Markdown in 2004 with Aaron Swartz.
 
@@ -100,22 +102,27 @@ CommonMark
 :   A strongly defined, highly compatible specification of Markdown.
 
 GFM (GitHub Flavored Markdown)
-:   GitHub's Markdown dialect that extends CommonMark with tables, task lists, strikethrough, and autolinks.
+:   GitHub's Markdown dialect that extends CommonMark with tables, task lists,
+    strikethrough, and autolinks.
+:   Also includes footnotes and definition lists via extensions.
 
 ---
 
-## Combined: Strikethrough + Inline Elements
+## Combined Inline Elements
 
 This text has ~~strikethrough~~ and **bold** and *italic* and `inline code`.
+
+An expression: $E = mc^2$ and a display equation:
+
+$$\int_0^1 x^2\,dx = \frac{1}{3}$$
 
 ---
 
 ## Blockquote
 
-> This is a blockquote.
-> It supports **formatting** and _emphasis_.
+> This is a blockquote with **formatting** and _emphasis_.
 >
-> Nested paragraph in the blockquote.
+> It spans multiple paragraphs.
 
 ---
 
@@ -135,4 +142,4 @@ fn main() {
 
 ## That's all!
 
-End of GFM fidelity fixture.
+End of GFM fidelity fixture. All sections above should render correctly.
