@@ -114,6 +114,7 @@ pub fn block_html_to_typst(html: &str) -> String {
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum Context {
     Inline,
     Block,
@@ -415,38 +416,46 @@ fn render_self_closing(name: &str, attrs: &[(String, String)], _state: &mut Rend
 }
 
 fn render_img_tag(attrs: &[(String, String)]) -> String {
+    use crate::renderer::{ImageInfo, SizeHint, css_length_to_typst, format_image_typst_sized, missing_image_fallback};
+
     let src = attr(attrs, "src").unwrap_or_default();
     let alt = attr(attrs, "alt").unwrap_or_default();
-    let width = attr(attrs, "width");
 
     if src.is_empty() {
-        return String::new();
+        // `<img>` with no `src` but maybe an `alt` — emit the fallback box.
+        return if alt.is_empty() {
+            String::new()
+        } else {
+            missing_image_fallback("", &alt)
+        };
     }
 
-    let width_arg = if let Some(w) = width {
-        // Might be "200px", "50%", "200" – do a best-effort conversion to Typst
-        let w = w.trim_end_matches("px").trim_end_matches('%');
-        if let Ok(n) = w.parse::<u32>() {
-            format!(", width: {}pt", n)
-        } else {
-            ", width: 100%".to_string()
-        }
-    } else {
-        ", width: 100%".to_string()
+    // Build size hint from `width` / `height` attributes.
+    let hint = SizeHint {
+        width: attr(attrs, "width").and_then(|w| css_length_to_typst(&w)),
+        height: attr(attrs, "height").and_then(|h| css_length_to_typst(&h)),
     };
 
-    let caption = if alt.is_empty() {
-        String::new()
-    } else {
-        format!(", caption: [{}]", escape_typst_text(&alt))
+    // Detect SVG by src extension (HTML blocks don't go through the download pipeline).
+    let is_svg = {
+        let lower = src.to_ascii_lowercase();
+        let path = lower.split('?').next().unwrap_or(&lower);
+        path.ends_with(".svg")
     };
 
-    format!(
-        "#figure(image({}{}){})\n\n",
-        typst_quoted_string(&src),
-        width_arg,
-        caption
-    )
+    // For HTML img tags the `src` is used as the path directly (may be relative
+    // or an absolute URL). We don't download here — Typst resolves local paths
+    // relative to the working directory.  Remote URLs are passed through; Typst
+    // will fail and we'll get a build error, but that's acceptable for the block
+    // HTML path since we don't have access to the cache dir here.
+    let info = ImageInfo {
+        path: std::path::PathBuf::from(&src),
+        is_svg,
+        natural_width: None,
+        natural_height: None,
+    };
+
+    format_image_typst_sized(&info, &alt, &hint)
 }
 
 // ── Open / close tags ─────────────────────────────────────────────────────────

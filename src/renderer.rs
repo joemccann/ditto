@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use comrak::{
     Arena, Options,
-    nodes::{AstNode, ListType, NodeCodeBlock, NodeHeading, NodeLink, NodeValue},
+    nodes::{AstNode, ListType, NodeCodeBlock, NodeHeading, NodeLink, NodeValue, NodeTable, TableAlignment},
     parse_document,
 };
 use std::collections::HashMap;
@@ -50,8 +50,18 @@ pub struct RenderConfig {
     pub base_font_size_pt: f32,
     pub fonts: FontSet,
     pub input_path: Option<PathBuf>,
-    #[allow(dead_code)]
     pub syntax_theme: String,
+    /// Whether to emit a table of contents page.
+    pub toc: bool,
+    /// When true, the `toc` value was explicitly set by the user via a CLI flag
+    /// and frontmatter cannot override it.
+    pub toc_explicit: bool,
+    /// Maximum heading depth to include in the TOC (1–6).
+    pub toc_depth: u8,
+    /// When true, remote images (http/https) are skipped rather than downloaded.
+    pub no_remote_images: bool,
+    /// Override for the cache directory used by remote-image downloads.
+    pub cache_dir_override: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,19 +120,42 @@ pub fn render_markdown_to_pdf(
     })
 }
 
+/// Public entry point for tests — converts markdown to Typst source without
+/// compiling to PDF.  Not part of the public API; only exported for `#[cfg(test)]`.
+#[cfg(test)]
+pub fn markdown_to_typst_pub(markdown: &str, config: &RenderConfig) -> Result<String> {
+    markdown_to_typst(markdown, config)
+}
+
 fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
     let arena = Arena::new();
     let root = parse_document(&arena, markdown, &markdown_options());
+
+    // Extract frontmatter overrides before rendering.
+    // CLI flags always win; frontmatter only applies when the value was not
+    // explicitly set via a CLI flag.
+    let fm = parse_frontmatter(markdown);
+    let toc_enabled = if config.toc_explicit {
+        config.toc
+    } else {
+        fm.toc.unwrap_or(config.toc)
+    };
+    let toc_depth = fm.toc_depth.unwrap_or(config.toc_depth).clamp(1, 6);
+
     let mut renderer = TypstRenderer::new(config);
     let body = renderer.render_children(root)?;
-    let toc = generate_typst_toc(markdown);
+    let toc = if toc_enabled {
+        generate_typst_toc(toc_depth)
+    } else {
+        String::new()
+    };
 
     Ok(format!(
         "#set page(width: {page_width}mm, height: {page_height}mm, margin: {margin}mm)\n\
 #set text(font: ({font},), size: {font_size}pt)\n\
 #show raw: set text(font: ({mono_font},), size: {code_size}pt)\n\
 #show link: set text(fill: blue)\n\
-{toc}\n\
+{toc}\
 {body}\n",
         page_width = config.page_width_mm,
         page_height = config.page_height_mm,
@@ -134,6 +167,43 @@ fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
         toc = toc,
         body = body,
     ))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Frontmatter parsing (YAML-subset: only `toc` and `toc_depth` keys)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Frontmatter {
+    toc: Option<bool>,
+    toc_depth: Option<u8>,
+}
+
+fn parse_frontmatter(markdown: &str) -> Frontmatter {
+    let mut fm = Frontmatter { toc: None, toc_depth: None };
+    let text = markdown.trim_start();
+    if !text.starts_with("---") {
+        return fm;
+    }
+    // Find closing delimiter
+    let after = &text[3..];
+    let close = after.find("\n---").or_else(|| after.find("\n..."));
+    let block = match close {
+        Some(pos) => &after[..pos],
+        None => return fm,
+    };
+    for line in block.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("toc_depth:") {
+            let val = rest.trim();
+            if let Ok(n) = val.parse::<u8>() {
+                fm.toc_depth = Some(n);
+            }
+        } else if let Some(rest) = line.strip_prefix("toc:") {
+            let val = rest.trim().to_ascii_lowercase();
+            fm.toc = Some(val == "true" || val == "yes" || val == "1");
+        }
+    }
+    fm
 }
 
 fn markdown_options() -> Options<'static> {
@@ -164,13 +234,25 @@ struct InlineHtmlFrame {
 struct TypstRenderer {
     asset_root: PathBuf,
     cache_dir: PathBuf,
+    /// Stack of list types for the currently open lists (innermost last).
     list_stack: Vec<ListType>,
+    /// The start counter for each open ordered list (parallel to list_stack).
+    /// Entry is `None` for bullet lists.
+    ordered_start_stack: Vec<Option<usize>>,
+    /// Running item counter for each open ordered list.
+    ordered_counter_stack: Vec<usize>,
+    /// Nesting depth of the current list (0 = not inside a list).
+    list_depth: usize,
     /// syntect theme name, e.g. "base16-ocean.dark" or "InspiredGitHub"
     syntax_theme: String,
     /// Monospace font name forwarded to code blocks
     mono_font: String,
     /// Open inline-HTML tag stack so close-tags emit the right Typst suffix.
     html_inline_stack: Vec<InlineHtmlFrame>,
+    /// When true, skip downloading remote images.
+    no_remote_images: bool,
+    /// Accumulated footnote definitions: (name, ix, rendered_body).
+    footnotes: Vec<(String, u32, String)>,
 }
 
 impl TypstRenderer {
@@ -180,15 +262,24 @@ impl TypstRenderer {
             .as_ref()
             .and_then(|path| path.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let cache_dir = asset_root.join(".md-to-pdf-cache");
+        // Use the explicit cache-dir override, or default to .md-to-pdf-cache/ next to the input
+        let cache_dir = config
+            .cache_dir_override
+            .clone()
+            .unwrap_or_else(|| asset_root.join(".md-to-pdf-cache"));
         let _ = fs::create_dir_all(&cache_dir);
         Self {
             asset_root,
             cache_dir,
             list_stack: Vec::new(),
+            ordered_start_stack: Vec::new(),
+            ordered_counter_stack: Vec::new(),
+            list_depth: 0,
             syntax_theme: config.syntax_theme.clone(),
             mono_font: config.fonts.monospace.clone(),
             html_inline_stack: Vec::new(),
+            no_remote_images: config.no_remote_images,
+            footnotes: Vec::new(),
         }
     }
 
@@ -202,7 +293,15 @@ impl TypstRenderer {
 
     fn render_node<'a>(&mut self, node: &'a AstNode<'a>) -> Result<String> {
         match &node.data.borrow().value {
-            NodeValue::Document => self.render_children(node),
+            NodeValue::Document => {
+                let body = self.render_children(node)?;
+                // Append footnote section after document body if any were collected.
+                if self.footnotes.is_empty() {
+                    Ok(body)
+                } else {
+                    Ok(format!("{}\n{}", body, self.emit_footnote_section()))
+                }
+            }
             NodeValue::FrontMatter(_) => Ok(String::new()),
             NodeValue::Paragraph => {
                 let inline = self.render_inline_children(node)?;
@@ -210,10 +309,14 @@ impl TypstRenderer {
             }
             NodeValue::Heading(NodeHeading { level, .. }) => {
                 let body = self.render_inline_children(node)?;
+                let label = heading_label(body.trim());
+                // Emit the heading followed by a Typst label so #outline()
+                // can build clickable, page-numbered TOC entries automatically.
                 Ok(format!(
-                    "{} {}\n\n",
+                    "{} {} <{}>\n\n",
                     "=".repeat(*level as usize),
-                    body.trim()
+                    body.trim(),
+                    label
                 ))
             }
             NodeValue::Text(text) => Ok(escape_typst_text(text)),
@@ -226,11 +329,17 @@ impl TypstRenderer {
             }
             NodeValue::Link(NodeLink { url, .. }) => {
                 let label = self.render_inline_children(node)?;
-                Ok(format!(
-                    "#link({}, [{}])",
-                    typst_quoted_string(url),
-                    label.trim()
-                ))
+                let label_trimmed = label.trim();
+                // For autolinks the label equals the URL — emit a compact #link(url).
+                if label_trimmed == url.as_str() || label_trimmed == url.trim_end_matches('/') {
+                    Ok(format!("#link({})", typst_quoted_string(url)))
+                } else {
+                    Ok(format!(
+                        "#link({}, [{}])",
+                        typst_quoted_string(url),
+                        label_trimmed
+                    ))
+                }
             }
             NodeValue::Image(NodeLink { url, .. }) => self.render_image(node, url),
             NodeValue::BlockQuote => {
@@ -241,15 +350,29 @@ impl TypstRenderer {
                 ))
             }
             NodeValue::List(list) => {
+                // Push list context: type + starting counter.
+                let start = list.start;
                 self.list_stack.push(list.list_type);
+                self.ordered_start_stack.push(
+                    if list.list_type == ListType::Ordered { Some(start) } else { None }
+                );
+                self.ordered_counter_stack.push(start.saturating_sub(1));
+                self.list_depth += 1;
                 let body = self.render_children(node)?;
+                self.list_depth -= 1;
                 self.list_stack.pop();
+                self.ordered_start_stack.pop();
+                self.ordered_counter_stack.pop();
+                // Add extra blank line after a top-level list for readability.
                 Ok(format!("{}\n", body))
             }
-            NodeValue::Item(..) => self.render_list_item(node),
+            NodeValue::Item(item) => self.render_list_item(node, item.list_type),
+            NodeValue::TaskItem(checked) => {
+                // TaskItem IS the item node — render it with checkbox prefix.
+                self.render_task_item(node, checked.is_some())
+            }
             NodeValue::CodeBlock(block) => Ok(self.render_code_block(block)),
-            NodeValue::TaskItem(_) => Ok(String::new()),
-            NodeValue::Table(..) => self.render_table(node),
+            NodeValue::Table(table) => self.render_table(node, table),
             NodeValue::ThematicBreak => Ok("#line(length: 100%)\n\n".to_string()),
             NodeValue::Math(math) => {
                 // Convert LaTeX math to Typst native math syntax
@@ -271,6 +394,41 @@ impl TypstRenderer {
                     Ok(rendered)
                 }
             }
+
+            // ── Footnotes ─────────────────────────────────────────────────────
+            NodeValue::FootnoteDefinition(def) => {
+                // Accumulate footnote body; we'll emit a section at document end.
+                let name = def.name.clone();
+                let ix = def.total_references; // use as ordinal
+                let body = self.render_children(node)?;
+                self.footnotes.push((name, ix, body.trim().to_string()));
+                Ok(String::new())
+            }
+            NodeValue::FootnoteReference(r) => {
+                // Emit a superscript numeral that anchors to the footnote section.
+                let ix = r.ix;
+                Ok(format!("#super[{}]", ix))
+            }
+
+            // ── Definition / description lists ────────────────────────────────
+            NodeValue::DescriptionList => {
+                let body = self.render_children(node)?;
+                Ok(format!("{}\n", body))
+            }
+            NodeValue::DescriptionItem(_) => {
+                let body = self.render_children(node)?;
+                Ok(body)
+            }
+            NodeValue::DescriptionTerm => {
+                let term = self.render_inline_children(node)?;
+                Ok(format!("#strong[{}]\\\n", term.trim()))
+            }
+            NodeValue::DescriptionDetails => {
+                let details = self.render_children(node)?;
+                // Indent like a list item — 4-space hang.
+                Ok(format!("#pad(left: 1.5em)[{}]\n\n", details.trim()))
+            }
+
             _ => self.render_children(node),
         }
     }
@@ -332,24 +490,59 @@ impl TypstRenderer {
         }
     }
 
-    fn render_list_item<'a>(&mut self, node: &'a AstNode<'a>) -> Result<String> {
-        let marker = match self.list_stack.last().copied().unwrap_or(ListType::Bullet) {
-            ListType::Bullet => "- ",
-            ListType::Ordered => "+ ",
+    fn render_list_item<'a>(&mut self, node: &'a AstNode<'a>, _list_type: ListType) -> Result<String> {
+        // Determine Typst marker based on list type.
+        let is_ordered = matches!(self.list_stack.last().copied(), Some(ListType::Ordered));
+        let marker = if is_ordered { "+ " } else { "- " };
+
+        // Advance ordered counter if applicable.
+        if is_ordered {
+            if let Some(ctr) = self.ordered_counter_stack.last_mut() {
+                *ctr += 1;
+            }
+        }
+
+        // Indentation: 2 spaces per nesting level (0-based: depth 1 = top-level = no indent).
+        let indent = if self.list_depth > 1 {
+            "  ".repeat(self.list_depth - 1)
+        } else {
+            String::new()
         };
 
         let mut parts = Vec::new();
         for child in node.children() {
-            match &child.data.borrow().value {
-                NodeValue::TaskItem(checked) => {
-                    let box_text = if checked.is_some() { "☒" } else { "☐" };
-                    parts.push(format!("{} ", box_text));
-                }
-                _ => parts.push(self.render_node(child)?),
-            }
+            parts.push(self.render_node(child)?);
         }
 
-        Ok(format!("{}{}\n", marker, parts.join("").trim()))
+        // Join children; trim trailing whitespace; nested lists are rendered inline.
+        let content = parts.join("").trim_end().to_string();
+        Ok(format!("{}{}{}\n", indent, marker, content.trim_start()))
+    }
+
+    fn render_task_item<'a>(&mut self, node: &'a AstNode<'a>, checked: bool) -> Result<String> {
+        // Task items always use bullet-style marker with a checkbox glyph.
+        let _checkbox = if checked { "[x]" } else { "[ ]" }; // kept for reference
+
+        // Indentation based on nesting depth.
+        let indent = if self.list_depth > 1 {
+            "  ".repeat(self.list_depth - 1)
+        } else {
+            String::new()
+        };
+
+        let mut parts = Vec::new();
+        for child in node.children() {
+            parts.push(self.render_node(child)?);
+        }
+        let content = parts.join("").trim().to_string();
+        // Emit as: `- #box[☑] content` using a styled checkbox
+        let box_char = if checked { "☑" } else { "☐" };
+        Ok(format!(
+            "{}- {}  {}\n",
+            indent,
+            escape_typst_text(box_char),
+            content.trim_start()
+        ))
     }
 
     fn render_code_block(&self, block: &NodeCodeBlock) -> String {
@@ -368,39 +561,28 @@ impl TypstRenderer {
 
     fn render_image<'a>(&mut self, node: &'a AstNode<'a>, url: &str) -> Result<String> {
         let alt = self.render_inline_children(node)?.trim().to_string();
-        let resolved = self.resolve_image_path(url)?;
-        let caption = if alt.is_empty() {
-            String::new()
-        } else {
-            format!(", caption: [{}]", escape_typst_text(&alt))
-        };
-        Ok(format!(
-            "#figure(image({}, width: 100%){})\n\n",
-            typst_quoted_string(&resolved),
-            caption
-        ))
+        match self.resolve_image(url) {
+            Ok(info) => Ok(format_image_typst(&info, &alt)),
+            Err(e) => {
+                eprintln!("Warning: skipping image {url}: {e}");
+                Ok(missing_image_fallback(url, &alt))
+            }
+        }
     }
 
-    fn resolve_image_path(&self, url: &str) -> Result<String> {
+    /// Resolve an image URL/path to an [`ImageInfo`], downloading and caching
+    /// remote images as needed.
+    fn resolve_image(&self, url: &str) -> Result<ImageInfo> {
         if url.starts_with("http://") || url.starts_with("https://") {
-            let hashed = stable_name(url);
-            let ext = guess_remote_extension(url);
-            let file_name = format!("remote-image-{}.{}", hashed, ext);
-            let target = self.cache_dir.join(file_name);
-            if !target.exists() {
-                let response = ureq::get(url)
-                    .call()
-                    .with_context(|| format!("Failed to download remote image: {url}"))?;
-                let mut bytes = Vec::new();
-                response
-                    .into_reader()
-                    .read_to_end(&mut bytes)
-                    .with_context(|| format!("Failed to read remote image response: {url}"))?;
-                fs::write(&target, bytes).with_context(|| {
-                    format!("Failed to cache remote image: {}", target.display())
-                })?;
+            if self.no_remote_images {
+                anyhow::bail!("remote images disabled (--no-remote-images): skipping {url}");
             }
-            return Ok(target.to_string_lossy().to_string());
+            return self.resolve_remote_image(url);
+        }
+
+        // Data URIs: data:image/png;base64,...
+        if url.starts_with("data:") {
+            return self.resolve_data_uri(url);
         }
 
         let path = Path::new(url);
@@ -409,16 +591,211 @@ impl TypstRenderer {
         } else {
             self.asset_root.join(path)
         };
-        Ok(resolved.to_string_lossy().to_string())
+
+        if !resolved.exists() {
+            anyhow::bail!("local image not found: {}", resolved.display());
+        }
+
+        let is_svg = resolved
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false);
+
+        Ok(ImageInfo {
+            path: resolved,
+            is_svg,
+            // Width/height unknown for local paths without parsing
+            natural_width: None,
+            natural_height: None,
+        })
     }
 
-    fn render_table<'a>(&mut self, node: &'a AstNode<'a>) -> Result<String> {
-        let mut rows = Vec::new();
+    fn resolve_remote_image(&self, url: &str) -> Result<ImageInfo> {
+        let hashed = stable_name(url);
+
+        // Check if we have a cached entry with a known extension already.
+        // We store a tiny metadata sidecar ("<hash>.meta") with:
+        //   etag=<value>\nlast_modified=<value>\next=<ext>
+        // so we can do conditional requests on re-runs.
+        let meta_path = self.cache_dir.join(format!("remote-image-{}.meta", hashed));
+        let cached_ext = read_cache_meta(&meta_path).map(|m| m.ext).unwrap_or_default();
+
+        // If we already have a cached file with a real extension, use it.
+        if !cached_ext.is_empty() {
+            let candidate = self
+                .cache_dir
+                .join(format!("remote-image-{}.{}", hashed, cached_ext));
+            if candidate.exists() {
+                // Attempt a conditional GET to validate freshness; fall back
+                // to the cached copy on any network error.
+                let meta = read_cache_meta(&meta_path);
+                match self.conditional_fetch(url, meta.as_ref(), &candidate, hashed.as_str()) {
+                    Ok(Some(new_info)) => return Ok(new_info),
+                    Ok(None) => {
+                        // 304 Not Modified — cached copy is still valid
+                        let is_svg = cached_ext == "svg";
+                        return Ok(ImageInfo {
+                            path: candidate,
+                            is_svg,
+                            natural_width: None,
+                            natural_height: None,
+                        });
+                    }
+                    Err(_) => {
+                        // Network failure — use cached copy
+                        let is_svg = cached_ext == "svg";
+                        return Ok(ImageInfo {
+                            path: candidate,
+                            is_svg,
+                            natural_width: None,
+                            natural_height: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // No cache hit — do a fresh download.
+        self.fetch_and_cache_remote(url, hashed.as_str())
+    }
+
+    /// Perform a conditional GET using ETag / Last-Modified from the cache
+    /// metadata.  Returns:
+    /// - `Ok(Some(info))` — the server returned fresh content (200), saved and ready.
+    /// - `Ok(None)` — server returned 304 Not Modified; caller should use the cache.
+    /// - `Err(_)` — any network or I/O error.
+    fn conditional_fetch(
+        &self,
+        url: &str,
+        meta: Option<&CacheMeta>,
+        _existing_path: &Path,
+        hashed: &str,
+    ) -> Result<Option<ImageInfo>> {
+        let mut req = ureq::get(url);
+
+        let has_condition = if let Some(m) = meta {
+            if !m.etag.is_empty() {
+                req = req.set("If-None-Match", &m.etag);
+                true
+            } else if !m.last_modified.is_empty() {
+                req = req.set("If-Modified-Since", &m.last_modified);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !has_condition {
+            // Nothing to conditionalize on — do a fresh download.
+            return self.fetch_and_cache_remote(url, hashed).map(Some);
+        }
+
+        match req.call() {
+            Ok(resp) => {
+                if resp.status() == 304 {
+                    return Ok(None);
+                }
+                // Got fresh content
+                let info = self.save_response(url, hashed, resp)?;
+                Ok(Some(info))
+            }
+            Err(ureq::Error::Status(304, _)) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("HTTP error fetching {url}: {e}")),
+        }
+    }
+
+    fn fetch_and_cache_remote(&self, url: &str, hashed: &str) -> Result<ImageInfo> {
+        let resp = ureq::get(url)
+            .call()
+            .with_context(|| format!("Failed to download remote image: {url}"))?;
+        self.save_response(url, hashed, resp)
+    }
+
+    fn save_response(&self, url: &str, hashed: &str, resp: ureq::Response) -> Result<ImageInfo> {
+        // Determine extension from Content-Type header first, then URL.
+        let content_type = resp.header("content-type").unwrap_or("").to_string();
+        let etag = resp.header("etag").unwrap_or("").to_string();
+        let last_modified = resp.header("last-modified").unwrap_or("").to_string();
+
+        let mut bytes = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("Failed to read remote image response: {url}"))?;
+
+        let ext = detect_image_format(url, &content_type, &bytes);
+        let is_svg = ext == "svg";
+
+        let file_name = format!("remote-image-{}.{}", hashed, ext);
+        let target = self.cache_dir.join(&file_name);
+        fs::write(&target, &bytes)
+            .with_context(|| format!("Failed to cache remote image: {}", target.display()))?;
+
+        // Write metadata sidecar for future conditional requests.
+        let meta_path = self.cache_dir.join(format!("remote-image-{}.meta", hashed));
+        let meta_content = format!("etag={}\nlast_modified={}\next={}\n", etag, last_modified, ext);
+        let _ = fs::write(&meta_path, meta_content);
+
+        Ok(ImageInfo {
+            path: target,
+            is_svg,
+            natural_width: None,
+            natural_height: None,
+        })
+    }
+
+    /// Decode a `data:image/png;base64,<data>` URI into a cached file.
+    fn resolve_data_uri(&self, uri: &str) -> Result<ImageInfo> {
+        // data:[<mediatype>][;base64],<data>
+        let rest = uri.strip_prefix("data:").unwrap_or(uri);
+        let (header, encoded) = rest
+            .split_once(',')
+            .ok_or_else(|| anyhow::anyhow!("Malformed data URI"))?;
+        let mime = header.split(';').next().unwrap_or("").to_ascii_lowercase();
+        let ext = mime_to_ext(&mime).unwrap_or("bin");
+        let is_base64 = header.contains("base64");
+        let bytes: Vec<u8> = if is_base64 {
+            decode_base64(encoded)?
+        } else {
+            percent_decode(encoded).into_owned().into_bytes()
+        };
+
+        let hashed = stable_name(uri);
+        let file_name = format!("data-image-{}.{}", hashed, ext);
+        let target = self.cache_dir.join(&file_name);
+        if !target.exists() {
+            fs::write(&target, &bytes)
+                .with_context(|| format!("Failed to write data URI image: {}", target.display()))?;
+        }
+        let is_svg = ext == "svg";
+        Ok(ImageInfo {
+            path: target,
+            is_svg,
+            natural_width: None,
+            natural_height: None,
+        })
+    }
+
+    fn render_table<'a>(&mut self, node: &'a AstNode<'a>, table: &NodeTable) -> Result<String> {
+        // Build per-column alignment string from GFM alignment markers.
+        let alignments: Vec<&str> = table.alignments.iter().map(|a| match a {
+            TableAlignment::Left   => "left",
+            TableAlignment::Center => "center",
+            TableAlignment::Right  => "right",
+            TableAlignment::None   => "left", // default
+        }).collect();
+
+        let mut rows: Vec<Vec<String>> = Vec::new();
         for row in node.children() {
             let mut cells = Vec::new();
+            let mut col_idx = 0usize;
             for cell in row.children() {
                 let text = self.render_inline_children(cell)?;
-                cells.push(format!("[{}]", text.trim()));
+                let align = alignments.get(col_idx).copied().unwrap_or("left");
+                // Wrap each cell with explicit per-cell alignment override.
+                cells.push(format!("table.cell(align: {})[{}]", align, text.trim()));
+                col_idx += 1;
             }
             if !cells.is_empty() {
                 rows.push(cells);
@@ -430,18 +807,50 @@ impl TypstRenderer {
         }
 
         let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
-        let mut flat = Vec::new();
-        for row in rows {
+
+        // Build a column-width spec: all equal fractional columns.
+        let col_spec = format!("({})", (0..column_count).map(|_| "1fr").collect::<Vec<_>>().join(", "));
+
+        // Style the header row differently: bold text + tinted background.
+        let mut flat: Vec<String> = Vec::new();
+        for (row_idx, row) in rows.into_iter().enumerate() {
             for cell in row {
-                flat.push(cell);
+                if row_idx == 0 {
+                    // Header row — wrap in bold fill.
+                    // Replace the closing `)[...]` with bold content
+                    let bolded = cell.replacen(")[", ")[#strong[", 1) + "]";
+                    flat.push(bolded);
+                } else {
+                    flat.push(cell);
+                }
             }
         }
 
         Ok(format!(
-            "#table(\n  columns: {},\n  stroke: luma(180),\n  inset: 6pt,\n  align: left,\n  {}\n)\n\n",
-            column_count,
+            "#table(\n  columns: {},\n  stroke: luma(200),\n  inset: 6pt,\n  fill: (col, row) => if row == 0 {{ luma(230) }} else {{ white }},\n  {}\n)\n\n",
+            col_spec,
             flat.join(",\n  ")
         ))
+    }
+
+    /// Emit the footnote section collected during document rendering.
+    fn emit_footnote_section(&self) -> String {
+        if self.footnotes.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("#line(length: 100%)\n\n");
+        // Sort by ix (document order).
+        let mut sorted = self.footnotes.clone();
+        sorted.sort_by_key(|(_, ix, _)| *ix);
+        for (ix, (_name, _ref_cnt, body)) in sorted.iter().enumerate() {
+            let num = ix + 1;
+            out.push_str(&format!(
+                "#super[{}] {}\n\n",
+                num,
+                body
+            ));
+        }
+        out
     }
 }
 
@@ -464,19 +873,19 @@ fn extract_toc(markdown: &str) -> Vec<TocEntry> {
         .collect()
 }
 
-fn generate_typst_toc(markdown: &str) -> String {
-    let entries = extract_toc(markdown);
-    if entries.is_empty() {
-        return String::new();
-    }
-
-    let mut lines = String::from("#pagebreak()\n= Table of Contents\n");
-    for entry in entries {
-        let indent = "  ".repeat(entry.level.saturating_sub(1) as usize);
-        lines.push_str(&format!("{indent}- {}\n", escape_typst_text(&entry.title)));
-    }
-    lines.push_str("#pagebreak()\n");
-    lines
+/// Generate a Typst `#outline()` block for the TOC page.
+///
+/// Typst's built-in `outline()` automatically:
+/// - Computes real page numbers for every heading
+/// - Renders dotted leader lines between title and page number
+/// - Makes each entry a clickable internal link
+///
+/// We control depth with the `depth:` parameter.
+fn generate_typst_toc(toc_depth: u8) -> String {
+    format!(
+        "#outline(\n  title: [Table of Contents],\n  depth: {},\n  indent: 1em,\n)\n\n",
+        toc_depth
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -848,6 +1257,62 @@ fn math_matrix_body(body: &str) -> String {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Convert a heading title to a Typst label identifier.
+///
+/// Typst labels must be valid identifiers: start with a letter or underscore,
+/// contain only ASCII letters, digits, hyphens, underscores, and dots.
+/// We strip Typst markup (e.g. `#strong[…]`) and convert to kebab-case.
+fn heading_label(title: &str) -> String {
+    // Strip simple Typst markup functions like `#strong[…]`, `#emph[…]`
+    let stripped = strip_typst_markup(title);
+    let slug: String = stripped
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse consecutive dashes and trim leading/trailing dashes
+    let slug = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() || slug.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        format!("h-{}", slug)
+    } else {
+        slug
+    }
+}
+
+/// Strip Typst markup function calls like `#strong[text]` → `text`.
+fn strip_typst_markup(s: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '#' {
+            // Skip `#funcname[`
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            if i < chars.len() && chars[i] == '[' {
+                i += 1; // skip '['
+            }
+        } else if chars[i] == ']' {
+            i += 1; // close bracket from markup — skip it
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn escape_typst_text(s: &str) -> String {
     s.replace('\n', " ")
         .replace('\\', "\\\\")
@@ -874,21 +1339,342 @@ fn stable_name(s: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
-fn guess_remote_extension(url: &str) -> &'static str {
-    let lower = url.to_ascii_lowercase();
-    if lower.ends_with(".png") {
-        "png"
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "jpg"
-    } else if lower.ends_with(".gif") {
-        "gif"
-    } else if lower.ends_with(".webp") {
-        "webp"
-    } else if lower.ends_with(".svg") {
-        "svg"
-    } else {
-        "img"
+// ─────────────────────────────────────────────────────────────────────────────
+// Image pipeline helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resolved information about an image ready to emit into Typst.
+#[derive(Debug)]
+pub struct ImageInfo {
+    /// Absolute path to the (possibly cached) image file.
+    pub path: PathBuf,
+    /// Whether the image is SVG (requires `format: "svg"` in Typst).
+    pub is_svg: bool,
+    /// Natural pixel width if known (e.g. parsed from HTML `width=` attr).
+    /// Reserved for future intrinsic-size calculations.
+    #[allow(dead_code)]
+    pub natural_width: Option<u32>,
+    /// Natural pixel height if known (e.g. parsed from HTML `height=` attr).
+    /// Reserved for future intrinsic-size calculations.
+    #[allow(dead_code)]
+    pub natural_height: Option<u32>,
+}
+
+/// Sizing hints extracted from HTML `width` / `height` attributes or Markdown
+/// title extras like `![alt](url){width=50%}`.
+#[derive(Debug, Default, Clone)]
+pub struct SizeHint {
+    /// Explicit width from markup, already normalized to a Typst value.
+    pub width: Option<String>,
+    /// Explicit height from markup, already normalized to a Typst value.
+    pub height: Option<String>,
+}
+
+/// Cached metadata sidecar for remote images.
+#[derive(Debug, Default, Clone)]
+struct CacheMeta {
+    /// HTTP ETag for conditional requests.
+    etag: String,
+    /// HTTP Last-Modified for conditional requests.
+    last_modified: String,
+    /// File extension of the cached file, e.g. `"png"`.
+    ext: String,
+}
+
+fn read_cache_meta(path: &Path) -> Option<CacheMeta> {
+    let content = fs::read_to_string(path).ok()?;
+    let mut meta = CacheMeta::default();
+    for line in content.lines() {
+        if let Some(v) = line.strip_prefix("etag=") {
+            meta.etag = v.to_string();
+        } else if let Some(v) = line.strip_prefix("last_modified=") {
+            meta.last_modified = v.to_string();
+        } else if let Some(v) = line.strip_prefix("ext=") {
+            meta.ext = v.to_string();
+        }
     }
+    if meta.ext.is_empty() { None } else { Some(meta) }
+}
+
+/// Determine the image format (file extension) using:
+/// 1. `Content-Type` response header (most reliable).
+/// 2. Magic bytes in the downloaded body.
+/// 3. URL path extension as last resort.
+pub fn detect_image_format(url: &str, content_type: &str, bytes: &[u8]) -> &'static str {
+    // 1. Content-Type header
+    let ct = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if let Some(ext) = mime_to_ext(&ct) {
+        return ext;
+    }
+
+    // 2. Magic bytes
+    if let Some(ext) = sniff_image_magic(bytes) {
+        return ext;
+    }
+
+    // 3. URL path extension
+    guess_extension_from_url(url)
+}
+
+/// Map a MIME type to a file extension.
+pub fn mime_to_ext(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/png"                      => Some("png"),
+        "image/jpeg" | "image/jpg"       => Some("jpg"),
+        "image/gif"                      => Some("gif"),
+        "image/webp"                     => Some("webp"),
+        "image/svg+xml" | "image/svg"    => Some("svg"),
+        "image/bmp"                      => Some("bmp"),
+        "image/tiff"                     => Some("tiff"),
+        "image/avif"                     => Some("avif"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
+        _ => None,
+    }
+}
+
+/// Detect image format by inspecting the first few bytes.
+pub fn sniff_image_magic(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    // PNG: 0x89 P N G
+    if bytes.starts_with(b"\x89PNG") {
+        return Some("png");
+    }
+    // JPEG: FF D8 FF
+    if bytes.starts_with(b"\xff\xd8\xff") {
+        return Some("jpg");
+    }
+    // GIF: GIF87a or GIF89a
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("gif");
+    }
+    // WebP: RIFF????WEBP
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("webp");
+    }
+    // BMP: BM
+    if bytes.starts_with(b"BM") {
+        return Some("bmp");
+    }
+    // TIFF: II* or MM*
+    if bytes.starts_with(b"II\x2a\x00") || bytes.starts_with(b"MM\x00\x2a") {
+        return Some("tiff");
+    }
+    // SVG: look for XML declaration or <svg at the start (after optional BOM/whitespace)
+    if is_svg_bytes(bytes) {
+        return Some("svg");
+    }
+    None
+}
+
+/// Heuristic: check if the byte slice looks like an SVG document.
+pub fn is_svg_bytes(bytes: &[u8]) -> bool {
+    // Skip BOM if present
+    let start = if bytes.starts_with(b"\xef\xbb\xbf") { 3 } else { 0 };
+    let snippet = &bytes[start..bytes.len().min(start + 512)];
+    if let Ok(s) = std::str::from_utf8(snippet) {
+        let trimmed = s.trim_start();
+        trimmed.starts_with("<?xml")
+            || trimmed.starts_with("<svg")
+            || trimmed.contains("<svg ")
+            || trimmed.contains("<svg\t")
+            || trimmed.contains("<svg\n")
+    } else {
+        false
+    }
+}
+
+/// Guess file extension from URL path only.
+fn guess_extension_from_url(url: &str) -> &'static str {
+    // Strip query string and fragment
+    let path = url.split('?').next().unwrap_or(url);
+    let path = path.split('#').next().unwrap_or(path);
+    let lower = path.to_ascii_lowercase();
+
+    if lower.ends_with(".png")              { "png"  }
+    else if lower.ends_with(".jpg")
+         || lower.ends_with(".jpeg")        { "jpg"  }
+    else if lower.ends_with(".gif")         { "gif"  }
+    else if lower.ends_with(".webp")        { "webp" }
+    else if lower.ends_with(".svg")         { "svg"  }
+    else if lower.ends_with(".bmp")         { "bmp"  }
+    else if lower.ends_with(".tiff")
+         || lower.ends_with(".tif")         { "tiff" }
+    else if lower.ends_with(".avif")        { "avif" }
+    else if lower.ends_with(".ico")         { "ico"  }
+    else                                    { "img"  }
+}
+
+/// Emit a Typst `#figure(image(…))` block for a resolved image.
+///
+/// Rules:
+/// - SVG images get `format: "svg"` so Typst parses them correctly.
+/// - If a width is specified in the size hint, use it; otherwise default to 100%.
+/// - If both width *and* height are specified, emit both so the aspect ratio
+///   is preserved (Typst will honour both if they are consistent).
+/// - Alt text becomes a figure caption when non-empty.
+pub fn format_image_typst(info: &ImageInfo, alt: &str) -> String {
+    format_image_typst_sized(info, alt, &SizeHint::default())
+}
+
+/// Like [`format_image_typst`] but accepts explicit size overrides.
+pub fn format_image_typst_sized(info: &ImageInfo, alt: &str, hint: &SizeHint) -> String {
+    let path_arg = typst_quoted_string(&info.path.to_string_lossy());
+
+    // Build image() arguments
+    let mut img_args = vec![path_arg];
+
+    if info.is_svg {
+        img_args.push("format: \"svg\"".to_string());
+    }
+
+    // Width
+    let width_val = hint.width.as_deref().unwrap_or("100%");
+    img_args.push(format!("width: {}", width_val));
+
+    // Height — only emit when explicitly requested to avoid distorting the image.
+    if let Some(h) = &hint.height {
+        img_args.push(format!("height: {}", h));
+    }
+
+    let img_call = format!("image({})", img_args.join(", "));
+
+    // Caption
+    let caption_arg = if alt.is_empty() {
+        String::new()
+    } else {
+        format!(", caption: [{}]", escape_typst_text(alt))
+    };
+
+    format!("#figure({}{})\n\n", img_call, caption_arg)
+}
+
+/// Render a styled placeholder block for an image that could not be loaded.
+///
+/// Emits a grey rounded box with the alt text (or the URL if no alt text) so
+/// the PDF is still complete and legible when an image is unavailable.
+pub fn missing_image_fallback(url: &str, alt: &str) -> String {
+    let label = if !alt.is_empty() {
+        escape_typst_text(alt)
+    } else {
+        // Use the last path component of the URL as a short label
+        let short = url
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .last()
+            .unwrap_or(url);
+        // Strip query string
+        let short = short.split('?').next().unwrap_or(short);
+        escape_typst_text(short)
+    };
+
+    format!(
+        "#block(\
+fill: luma(235), \
+stroke: 1pt + luma(180), \
+inset: 10pt, \
+radius: 4pt, \
+width: 100%\
+)[#align(center)[#text(fill: luma(120))[\\[Image: {}\\]]]]\n\n",
+        label
+    )
+}
+
+/// Convert a CSS-style `width` or `height` attribute value to a Typst measure.
+///
+/// Handles:
+/// - `200px` → `"150pt"` (72 pt/in, 96 px/in → multiply by 0.75)
+/// - `50%`   → `"50%"`
+/// - `200`   → `"150pt"` (bare integer treated as pixels)
+/// - `10em`  → `"10em"`
+/// - `10pt`  → `"10pt"`
+/// - `10cm`  → `"10cm"`
+/// - `10mm`  → `"10mm"`
+pub fn css_length_to_typst(val: &str) -> Option<String> {
+    let v = val.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if v.ends_with('%') {
+        return Some(v.to_string());
+    }
+    if v.ends_with("px") {
+        let n: f64 = v.trim_end_matches("px").trim().parse().ok()?;
+        return Some(format!("{:.1}pt", n * 0.75));
+    }
+    if v.ends_with("em") {
+        return Some(v.to_string());
+    }
+    if v.ends_with("rem") {
+        let n = v.trim_end_matches("rem");
+        return Some(format!("{}em", n));
+    }
+    if v.ends_with("pt") || v.ends_with("mm") || v.ends_with("cm") || v.ends_with("in") {
+        return Some(v.to_string());
+    }
+    // Bare integer → treat as pixels
+    if let Ok(n) = v.parse::<f64>() {
+        return Some(format!("{:.1}pt", n * 0.75));
+    }
+    None
+}
+
+/// Decode a base64 string (standard or URL-safe alphabet, with or without padding).
+pub fn decode_base64(s: &str) -> Result<Vec<u8>> {
+    // Remove all whitespace (base64 in data URIs sometimes has line breaks)
+    let clean: String = s.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    // Simple base64 decoder (standard + URL-safe, tolerates missing padding)
+    let alphabet_std: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let alphabet_url: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let url_safe = clean.contains('-') || clean.contains('_');
+    let alphabet = if url_safe { alphabet_url } else { alphabet_std };
+
+    let mut table = [0u8; 256];
+    for (i, &b) in alphabet.iter().enumerate() {
+        table[b as usize] = i as u8;
+    }
+
+    let bytes = clean.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        let b0 = if bytes[i] == b'=' { 0 } else { table[bytes[i] as usize] };
+        let b1 = if bytes[i+1] == b'=' { 0 } else { table[bytes[i+1] as usize] };
+        let b2 = if bytes[i+2] == b'=' { 0 } else { table[bytes[i+2] as usize] };
+        let b3 = if bytes[i+3] == b'=' { 0 } else { table[bytes[i+3] as usize] };
+        let v = ((b0 as u32) << 18) | ((b1 as u32) << 12) | ((b2 as u32) << 6) | (b3 as u32);
+        out.push((v >> 16) as u8);
+        if bytes[i+2] != b'=' { out.push(((v >> 8) & 0xff) as u8); }
+        if bytes[i+3] != b'=' { out.push((v & 0xff) as u8); }
+        i += 4;
+    }
+    Ok(out)
+}
+
+/// Minimal percent-decode for data URI payloads.
+fn percent_decode(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('%') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i+1] as char).to_digit(16),
+                (bytes[i+2] as char).to_digit(16),
+            ) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn format_typst_errors(errors: &[typst::diag::SourceDiagnostic]) -> String {
@@ -970,5 +1756,641 @@ impl World for TypstWorld {
 
     fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
         None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image pipeline tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    // ── detect_image_format ───────────────────────────────────────────────
+
+    #[test]
+    fn detect_format_content_type_png() {
+        let bytes = b"\x89PNG\r\n\x1a\n";
+        assert_eq!(detect_image_format("https://example.com/img", "image/png", bytes), "png");
+    }
+
+    #[test]
+    fn detect_format_content_type_jpeg() {
+        let bytes = b"\xff\xd8\xff\xe0";
+        assert_eq!(detect_image_format("https://example.com/img", "image/jpeg", bytes), "jpg");
+    }
+
+    #[test]
+    fn detect_format_content_type_svg() {
+        let bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+        assert_eq!(detect_image_format("https://example.com/img", "image/svg+xml", bytes), "svg");
+    }
+
+    #[test]
+    fn detect_format_content_type_webp() {
+        let bytes = b"RIFFxxxxWEBP";
+        assert_eq!(detect_image_format("https://example.com/img", "image/webp", bytes), "webp");
+    }
+
+    #[test]
+    fn detect_format_content_type_strips_params() {
+        // "image/png; charset=utf-8" should still resolve to png
+        let bytes = b"\x89PNG";
+        assert_eq!(detect_image_format("https://example.com/x", "image/png; charset=utf-8", bytes), "png");
+    }
+
+    // ── sniff_image_magic ─────────────────────────────────────────────────
+
+    #[test]
+    fn sniff_magic_png() {
+        let bytes = b"\x89PNG\r\n\x1a\nextra";
+        assert_eq!(sniff_image_magic(bytes), Some("png"));
+    }
+
+    #[test]
+    fn sniff_magic_jpeg() {
+        let bytes = b"\xff\xd8\xffextra";
+        assert_eq!(sniff_image_magic(bytes), Some("jpg"));
+    }
+
+    #[test]
+    fn sniff_magic_gif87() {
+        assert_eq!(sniff_image_magic(b"GIF87aXXXX"), Some("gif"));
+    }
+
+    #[test]
+    fn sniff_magic_gif89() {
+        assert_eq!(sniff_image_magic(b"GIF89aXXXX"), Some("gif"));
+    }
+
+    #[test]
+    fn sniff_magic_webp() {
+        let mut bytes = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
+        bytes.extend_from_slice(b"extra");
+        assert_eq!(sniff_image_magic(&bytes), Some("webp"));
+    }
+
+    #[test]
+    fn sniff_magic_bmp() {
+        assert_eq!(sniff_image_magic(b"BMextra"), Some("bmp"));
+    }
+
+    #[test]
+    fn sniff_magic_tiff_le() {
+        assert_eq!(sniff_image_magic(b"II\x2a\x00extra"), Some("tiff"));
+    }
+
+    #[test]
+    fn sniff_magic_tiff_be() {
+        assert_eq!(sniff_image_magic(b"MM\x00\x2aextra"), Some("tiff"));
+    }
+
+    #[test]
+    fn sniff_magic_short_returns_none() {
+        assert_eq!(sniff_image_magic(b"PNG"), None);
+    }
+
+    #[test]
+    fn sniff_magic_unknown_returns_none() {
+        assert_eq!(sniff_image_magic(b"????garbage"), None);
+    }
+
+    // ── is_svg_bytes ──────────────────────────────────────────────────────
+
+    #[test]
+    fn is_svg_bytes_xml_declaration() {
+        let bytes = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+        assert!(is_svg_bytes(bytes));
+    }
+
+    #[test]
+    fn is_svg_bytes_bare_svg_tag() {
+        let bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"></svg>";
+        assert!(is_svg_bytes(bytes));
+    }
+
+    #[test]
+    fn is_svg_bytes_with_bom() {
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.extend_from_slice(b"<svg></svg>");
+        assert!(is_svg_bytes(&bytes));
+    }
+
+    #[test]
+    fn is_svg_bytes_whitespace_before_tag() {
+        let bytes = b"   \n\t<svg></svg>";
+        assert!(is_svg_bytes(bytes));
+    }
+
+    #[test]
+    fn is_svg_bytes_png_is_not_svg() {
+        let bytes = b"\x89PNG\r\n\x1a\n";
+        assert!(!is_svg_bytes(bytes));
+    }
+
+    #[test]
+    fn is_svg_bytes_html_is_not_svg() {
+        let bytes = b"<!DOCTYPE html><html></html>";
+        assert!(!is_svg_bytes(bytes));
+    }
+
+    // ── guess_extension_from_url ──────────────────────────────────────────
+
+    #[test]
+    fn url_ext_png() {
+        assert_eq!(guess_extension_from_url("https://example.com/logo.png"), "png");
+    }
+
+    #[test]
+    fn url_ext_jpeg() {
+        assert_eq!(guess_extension_from_url("https://cdn.example.com/photo.jpeg"), "jpg");
+    }
+
+    #[test]
+    fn url_ext_jpg() {
+        assert_eq!(guess_extension_from_url("https://cdn.example.com/photo.jpg"), "jpg");
+    }
+
+    #[test]
+    fn url_ext_svg() {
+        assert_eq!(guess_extension_from_url("https://example.com/icon.svg"), "svg");
+    }
+
+    #[test]
+    fn url_ext_strips_query() {
+        assert_eq!(guess_extension_from_url("https://example.com/img.png?v=2&size=large"), "png");
+    }
+
+    #[test]
+    fn url_ext_strips_fragment() {
+        assert_eq!(guess_extension_from_url("https://example.com/photo.jpg#section"), "jpg");
+    }
+
+    #[test]
+    fn url_ext_no_extension_returns_img() {
+        assert_eq!(guess_extension_from_url("https://example.com/images/photo"), "img");
+    }
+
+    #[test]
+    fn url_ext_case_insensitive() {
+        assert_eq!(guess_extension_from_url("https://example.com/img.PNG"), "png");
+        assert_eq!(guess_extension_from_url("https://example.com/img.GIF"), "gif");
+    }
+
+    // ── mime_to_ext ───────────────────────────────────────────────────────
+
+    #[test]
+    fn mime_png() { assert_eq!(mime_to_ext("image/png"), Some("png")); }
+
+    #[test]
+    fn mime_jpeg() { assert_eq!(mime_to_ext("image/jpeg"), Some("jpg")); }
+
+    #[test]
+    fn mime_svg() { assert_eq!(mime_to_ext("image/svg+xml"), Some("svg")); }
+
+    #[test]
+    fn mime_webp() { assert_eq!(mime_to_ext("image/webp"), Some("webp")); }
+
+    #[test]
+    fn mime_gif() { assert_eq!(mime_to_ext("image/gif"), Some("gif")); }
+
+    #[test]
+    fn mime_unknown_returns_none() {
+        assert_eq!(mime_to_ext("application/octet-stream"), None);
+        assert_eq!(mime_to_ext(""), None);
+    }
+
+    // ── css_length_to_typst ───────────────────────────────────────────────
+
+    #[test]
+    fn css_px_converts_to_pt() {
+        assert_eq!(css_length_to_typst("100px"), Some("75.0pt".to_string()));
+    }
+
+    #[test]
+    fn css_px_converts_float() {
+        // 96px → 72pt (×0.75)
+        assert_eq!(css_length_to_typst("96px"), Some("72.0pt".to_string()));
+    }
+
+    #[test]
+    fn css_bare_integer_treated_as_pixels() {
+        assert_eq!(css_length_to_typst("200"), Some("150.0pt".to_string()));
+    }
+
+    #[test]
+    fn css_percent_passes_through() {
+        assert_eq!(css_length_to_typst("50%"), Some("50%".to_string()));
+        assert_eq!(css_length_to_typst("100%"), Some("100%".to_string()));
+    }
+
+    #[test]
+    fn css_em_passes_through() {
+        assert_eq!(css_length_to_typst("2.5em"), Some("2.5em".to_string()));
+    }
+
+    #[test]
+    fn css_rem_converts_to_em() {
+        assert_eq!(css_length_to_typst("1.5rem"), Some("1.5em".to_string()));
+    }
+
+    #[test]
+    fn css_pt_passes_through() {
+        assert_eq!(css_length_to_typst("12pt"), Some("12pt".to_string()));
+    }
+
+    #[test]
+    fn css_mm_passes_through() {
+        assert_eq!(css_length_to_typst("20mm"), Some("20mm".to_string()));
+    }
+
+    #[test]
+    fn css_cm_passes_through() {
+        assert_eq!(css_length_to_typst("5cm"), Some("5cm".to_string()));
+    }
+
+    #[test]
+    fn css_empty_returns_none() {
+        assert_eq!(css_length_to_typst(""), None);
+    }
+
+    #[test]
+    fn css_invalid_returns_none() {
+        assert_eq!(css_length_to_typst("auto"), None);
+    }
+
+    // ── format_image_typst ────────────────────────────────────────────────
+
+    fn make_info(path: &str, is_svg: bool) -> ImageInfo {
+        ImageInfo {
+            path: PathBuf::from(path),
+            is_svg,
+            natural_width: None,
+            natural_height: None,
+        }
+    }
+
+    #[test]
+    fn typst_png_no_alt() {
+        let info = make_info("/tmp/test.png", false);
+        let out = format_image_typst(&info, "");
+        assert!(out.contains("image(\"/tmp/test.png\""), "got: {out}");
+        assert!(out.contains("width: 100%"), "got: {out}");
+        assert!(!out.contains("caption"), "got: {out}");
+        assert!(!out.contains("format:"), "got: {out}");
+    }
+
+    #[test]
+    fn typst_png_with_alt_becomes_caption() {
+        let info = make_info("/tmp/test.png", false);
+        let out = format_image_typst(&info, "A diagram");
+        assert!(out.contains("caption: [A diagram]"), "got: {out}");
+    }
+
+    #[test]
+    fn typst_svg_gets_format_arg() {
+        let info = make_info("/tmp/logo.svg", true);
+        let out = format_image_typst(&info, "");
+        assert!(out.contains("format: \"svg\""), "got: {out}");
+        assert!(out.contains("image("), "got: {out}");
+    }
+
+    #[test]
+    fn typst_with_width_hint_uses_it() {
+        let info = make_info("/tmp/test.png", false);
+        let hint = SizeHint {
+            width: Some("50%".to_string()),
+            height: None,
+        };
+        let out = format_image_typst_sized(&info, "", &hint);
+        assert!(out.contains("width: 50%"), "got: {out}");
+        assert!(!out.contains("height:"), "got: {out}");
+    }
+
+    #[test]
+    fn typst_with_height_hint_emitted() {
+        let info = make_info("/tmp/test.png", false);
+        let hint = SizeHint {
+            width: Some("100%".to_string()),
+            height: Some("200pt".to_string()),
+        };
+        let out = format_image_typst_sized(&info, "", &hint);
+        assert!(out.contains("width: 100%"), "got: {out}");
+        assert!(out.contains("height: 200pt"), "got: {out}");
+    }
+
+    #[test]
+    fn typst_svg_with_size_hint() {
+        let info = make_info("/path/to/diagram.svg", true);
+        let hint = SizeHint {
+            width: Some("75%".to_string()),
+            height: None,
+        };
+        let out = format_image_typst_sized(&info, "Flowchart", &hint);
+        assert!(out.contains("format: \"svg\""), "got: {out}");
+        assert!(out.contains("width: 75%"), "got: {out}");
+        assert!(out.contains("caption: [Flowchart]"), "got: {out}");
+    }
+
+    #[test]
+    fn typst_alt_special_chars_escaped() {
+        let info = make_info("/img.png", false);
+        // Special Typst chars in alt text must be escaped
+        let out = format_image_typst(&info, "a #hash [bracket] & {brace}");
+        assert!(out.contains("\\#hash"), "got: {out}");
+        assert!(out.contains("\\[bracket\\]"), "got: {out}");
+        assert!(out.contains("\\{brace\\}"), "got: {out}");
+    }
+
+    // ── missing_image_fallback ────────────────────────────────────────────
+
+    #[test]
+    fn fallback_with_alt() {
+        let out = missing_image_fallback("https://example.com/img.png", "My diagram");
+        assert!(out.contains("My diagram"), "got: {out}");
+        assert!(out.contains("#block("), "got: {out}");
+        assert!(out.contains("luma("), "got: {out}");
+    }
+
+    #[test]
+    fn fallback_no_alt_uses_filename() {
+        let out = missing_image_fallback("https://cdn.example.com/photo.jpg", "");
+        assert!(out.contains("photo.jpg"), "got: {out}");
+    }
+
+    #[test]
+    fn fallback_no_alt_strips_query() {
+        let out = missing_image_fallback("https://cdn.example.com/img.png?v=1&size=lg", "");
+        // Should include base filename only
+        assert!(out.contains("img.png"), "got: {out}");
+        assert!(!out.contains("v=1"), "got: {out}");
+    }
+
+    #[test]
+    fn fallback_empty_url_empty_alt() {
+        let out = missing_image_fallback("", "");
+        assert!(out.contains("#block("), "got: {out}");
+    }
+
+    #[test]
+    fn fallback_special_chars_escaped() {
+        let out = missing_image_fallback("img.png", "a [b] #c");
+        assert!(out.contains("\\[b\\]"), "got: {out}");
+        assert!(out.contains("\\#c"), "got: {out}");
+    }
+
+    // ── cache metadata ────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_meta_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let meta_path = dir.path().join("test.meta");
+        let content = "etag=W/\"abc123\"\nlast_modified=Mon, 01 Jan 2024 00:00:00 GMT\next=png\n";
+        fs::write(&meta_path, content).unwrap();
+        let meta = read_cache_meta(&meta_path).unwrap();
+        assert_eq!(meta.etag, "W/\"abc123\"");
+        assert_eq!(meta.last_modified, "Mon, 01 Jan 2024 00:00:00 GMT");
+        assert_eq!(meta.ext, "png");
+    }
+
+    #[test]
+    fn cache_meta_missing_ext_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let meta_path = dir.path().join("test.meta");
+        fs::write(&meta_path, "etag=foo\n").unwrap();
+        assert!(read_cache_meta(&meta_path).is_none());
+    }
+
+    #[test]
+    fn cache_meta_nonexistent_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let meta_path = dir.path().join("nonexistent.meta");
+        assert!(read_cache_meta(&meta_path).is_none());
+    }
+
+    // ── base64 decoder ────────────────────────────────────────────────────
+
+    #[test]
+    fn base64_decode_hello() {
+        // "Hello" = SGVsbG8=
+        let out = decode_base64("SGVsbG8=").unwrap();
+        assert_eq!(out, b"Hello");
+    }
+
+    #[test]
+    fn base64_decode_no_padding() {
+        // "Man" = TWFu (no padding needed)
+        let out = decode_base64("TWFu").unwrap();
+        assert_eq!(out, b"Man");
+    }
+
+    #[test]
+    fn base64_decode_with_newlines() {
+        // base64 with line breaks (as in data URIs)
+        let encoded = "SGVs\nbG8=";
+        let out = decode_base64(encoded).unwrap();
+        assert_eq!(out, b"Hello");
+    }
+
+    #[test]
+    fn base64_decode_empty() {
+        let out = decode_base64("").unwrap();
+        assert!(out.is_empty());
+    }
+
+    // ── resolve_image (local) ─────────────────────────────────────────────
+
+    fn make_renderer_in(dir: &TempDir) -> TypstRenderer {
+        let _ = fs::create_dir_all(dir.path().join("cache"));
+        TypstRenderer {
+            asset_root: dir.path().to_path_buf(),
+            cache_dir: dir.path().join("cache"),
+            list_stack: Vec::new(),
+            ordered_start_stack: Vec::new(),
+            ordered_counter_stack: Vec::new(),
+            list_depth: 0,
+            syntax_theme: "InspiredGitHub".to_string(),
+            mono_font: "DejaVu Sans Mono".to_string(),
+            html_inline_stack: Vec::new(),
+            no_remote_images: false,
+            footnotes: Vec::new(),
+        }
+    }
+
+    fn test_config(dir: &TempDir) -> RenderConfig {
+        RenderConfig {
+            page_width_mm: 210.0,
+            page_height_mm: 297.0,
+            margin_mm: 20.0,
+            base_font_size_pt: 12.0,
+            fonts: FontSet::default(),
+            input_path: Some(dir.path().join("test.md")),
+            syntax_theme: "InspiredGitHub".to_string(),
+            toc: false,
+            toc_explicit: false,
+            toc_depth: 3,
+            no_remote_images: true,
+            cache_dir_override: None,
+        }
+    }
+
+    #[test]
+    fn resolve_local_png_exists() {
+        let dir = TempDir::new().unwrap();
+        let img_path = dir.path().join("photo.png");
+        fs::write(&img_path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let r = make_renderer_in(&dir);
+        let info = r.resolve_image("photo.png").unwrap();
+        assert_eq!(info.path, img_path);
+        assert!(!info.is_svg);
+    }
+
+    #[test]
+    fn resolve_local_svg_sets_is_svg() {
+        let dir = TempDir::new().unwrap();
+        let svg_path = dir.path().join("icon.svg");
+        fs::write(&svg_path, b"<svg></svg>").unwrap();
+        let r = make_renderer_in(&dir);
+        let info = r.resolve_image("icon.svg").unwrap();
+        assert!(info.is_svg);
+    }
+
+    #[test]
+    fn resolve_local_missing_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let r = make_renderer_in(&dir);
+        let result = r.resolve_image("nonexistent.png");
+        assert!(result.is_err(), "expected error for missing local image");
+    }
+
+    #[test]
+    fn resolve_remote_skipped_when_disabled() {
+        let dir = TempDir::new().unwrap();
+        let mut r = make_renderer_in(&dir);
+        r.no_remote_images = true;
+        let result = r.resolve_image("https://example.com/photo.png");
+        assert!(result.is_err(), "expected error when remote images disabled");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("remote images disabled") || msg.contains("--no-remote-images"),
+            "unexpected message: {msg}");
+    }
+
+    // ── data URI round-trip ───────────────────────────────────────────────
+
+    #[test]
+    fn resolve_data_uri_png() {
+        let dir = TempDir::new().unwrap();
+        let r = make_renderer_in(&dir);
+        // Minimal 1×1 white PNG, base64-encoded
+        let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        let uri = format!("data:image/png;base64,{}", b64);
+        let info = r.resolve_data_uri(&uri).unwrap();
+        assert!(!info.is_svg);
+        assert!(info.path.exists(), "cached file should exist");
+        assert_eq!(info.path.extension().unwrap().to_str().unwrap(), "png");
+    }
+
+    #[test]
+    fn resolve_data_uri_svg() {
+        let dir = TempDir::new().unwrap();
+        let r = make_renderer_in(&dir);
+        let svg_b64 = {
+            let svg = b"<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+            // Manual base64 encode
+            base64_encode(svg)
+        };
+        let uri = format!("data:image/svg+xml;base64,{}", svg_b64);
+        let info = r.resolve_data_uri(&uri).unwrap();
+        assert!(info.is_svg, "SVG data URI should set is_svg=true");
+        assert_eq!(info.path.extension().unwrap().to_str().unwrap(), "svg");
+    }
+
+    // Helper: simple base64 encoder for test use only.
+    fn base64_encode(input: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in input.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+            let combined = (b0 << 16) | (b1 << 8) | b2;
+            out.push(ALPHABET[((combined >> 18) & 0x3f) as usize] as char);
+            out.push(ALPHABET[((combined >> 12) & 0x3f) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(ALPHABET[((combined >> 6) & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+            if chunk.len() > 2 {
+                out.push(ALPHABET[(combined & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+        out
+    }
+
+    // ── markdown round-trips (no network needed) ──────────────────────────
+
+    #[test]
+    fn md_missing_local_image_emits_fallback_not_error() {
+        // The renderer should not bubble an error when a local image is missing;
+        // it should emit the fallback placeholder box and continue.
+        let dir = TempDir::new().unwrap();
+        let md = "# Test\n\n![Missing image](nonexistent.png)\n\nSome text.\n";
+        let config = test_config(&dir);
+        // markdown_to_typst should succeed (fallback is used)
+        let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
+        assert!(typst_src.contains("\\[Image:"), "expected fallback placeholder, got:\n{typst_src}");
+        assert!(typst_src.contains("nonexistent"), "should include image name in fallback:\n{typst_src}");
+    }
+
+    #[test]
+    fn md_local_svg_emits_format_svg() {
+        let dir = TempDir::new().unwrap();
+        let svg_path = dir.path().join("diagram.svg");
+        fs::write(&svg_path, b"<svg></svg>").unwrap();
+        let md = "# Test\n\n![A diagram](diagram.svg)\n";
+        let config = test_config(&dir);
+        let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
+        assert!(typst_src.contains("format: \"svg\""), "expected SVG format arg, got:\n{typst_src}");
+    }
+
+    #[test]
+    fn md_image_alt_becomes_caption() {
+        let dir = TempDir::new().unwrap();
+        let img_path = dir.path().join("chart.png");
+        fs::write(&img_path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let md = "![Quarterly results](chart.png)\n";
+        let config = test_config(&dir);
+        let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
+        assert!(typst_src.contains("caption: [Quarterly results]"), "got:\n{typst_src}");
+    }
+
+    #[test]
+    fn md_image_no_alt_no_caption() {
+        let dir = TempDir::new().unwrap();
+        let img_path = dir.path().join("photo.png");
+        fs::write(&img_path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let md = "![](photo.png)\n";
+        let config = test_config(&dir);
+        let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
+        assert!(!typst_src.contains("caption"), "should have no caption, got:\n{typst_src}");
+    }
+
+    #[test]
+    fn md_remote_image_skipped_emits_fallback() {
+        let dir = TempDir::new().unwrap();
+        let md = "![Cloud photo](https://example.com/remote.jpg)\n\nSome text after.\n";
+        let config = test_config(&dir);
+        let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
+        // Should have a fallback block, not an image() call with the https URL
+        assert!(!typst_src.contains("image(\"https://"), "should not emit remote URL, got:\n{typst_src}");
+        assert!(typst_src.contains("#block("), "expected fallback block, got:\n{typst_src}");
+        // Body text after the image should still be present
+        assert!(typst_src.contains("Some text after"), "body text missing, got:\n{typst_src}");
     }
 }
