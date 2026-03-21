@@ -127,6 +127,48 @@ pub fn markdown_to_typst_pub(markdown: &str, config: &RenderConfig) -> Result<St
     markdown_to_typst(markdown, config)
 }
 
+/// Test shim: expose `escape_typst_text` to integration tests.
+#[cfg(test)]
+pub fn escape_typst_text_pub(s: &str) -> String {
+    escape_typst_text(s)
+}
+
+/// Test shim: expose `heading_label` to integration tests.
+#[cfg(test)]
+pub fn heading_label_pub(title: &str) -> String {
+    heading_label(title)
+}
+
+/// Test shim: expose `latex_to_typst` to integration tests.
+#[cfg(test)]
+pub fn latex_to_typst_pub(latex: &str) -> String {
+    latex_to_typst(latex)
+}
+
+/// Test shim: expose `typst_quoted_string` to integration tests.
+#[cfg(test)]
+pub fn typst_quoted_string_pub(s: &str) -> String {
+    typst_quoted_string(s)
+}
+
+/// Test shim: expose `generate_typst_toc` to integration tests.
+#[cfg(test)]
+pub fn generate_typst_toc_pub(depth: u8) -> String {
+    generate_typst_toc(depth)
+}
+
+/// Test shim: expose `extract_toc` to integration tests.
+#[cfg(test)]
+pub fn extract_toc_pub(markdown: &str) -> Vec<TocEntry> {
+    extract_toc(markdown)
+}
+
+/// Test shim: expose `stable_name` (hash helper) to integration tests.
+#[cfg(test)]
+pub fn stable_name_pub(s: &str) -> String {
+    stable_name(s)
+}
+
 fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
     let arena = Arena::new();
     let root = parse_document(&arena, markdown, &markdown_options());
@@ -143,7 +185,8 @@ fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
     let toc_depth = fm.toc_depth.unwrap_or(config.toc_depth).clamp(1, 6);
 
     let mut renderer = TypstRenderer::new(config);
-    let body = renderer.render_children(root)?;
+    // render_node(root) goes through the Document arm which appends footnotes.
+    let body = renderer.render_node(root)?;
     let toc = if toc_enabled {
         generate_typst_toc(toc_depth)
     } else {
@@ -2402,5 +2445,373 @@ mod image_tests {
         assert!(typst_src.contains("#block("), "expected fallback block, got:\n{typst_src}");
         // Body text after the image should still be present
         assert!(typst_src.contains("Some text after"), "body text missing, got:\n{typst_src}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GFM Fidelity Fixtures
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod gfm_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn render(md: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        let config = RenderConfig {
+            page_width_mm: 210.0,
+            page_height_mm: 297.0,
+            margin_mm: 20.0,
+            base_font_size_pt: 12.0,
+            fonts: FontSet::default(),
+            input_path: None,
+            syntax_theme: "InspiredGitHub".to_string(),
+            toc: false,
+            toc_explicit: false,
+            toc_depth: 3,
+            no_remote_images: true,
+            cache_dir_override: Some(dir.path().to_path_buf()),
+        };
+        markdown_to_typst_pub(md, &config).expect("render failed")
+    }
+
+    // ── Nested lists ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn nested_bullet_list_indents() {
+        let md = "- Item A\n  - Item B\n    - Item C\n- Item D\n";
+        let out = render(md);
+        // Top-level items have no indent
+        assert!(out.contains("- Item A"), "expected top-level bullet, got:\n{out}");
+        assert!(out.contains("- Item D"), "expected top-level bullet, got:\n{out}");
+        // Nested items should be indented (2 spaces per level)
+        assert!(out.contains("  - Item B"), "expected 1-level indent, got:\n{out}");
+        assert!(out.contains("    - Item C"), "expected 2-level indent, got:\n{out}");
+    }
+
+    #[test]
+    fn nested_ordered_list_indents() {
+        let md = "1. First\n   1. Nested one\n   2. Nested two\n2. Second\n";
+        let out = render(md);
+        assert!(out.contains("+ First"), "expected ordered marker, got:\n{out}");
+        assert!(out.contains("+ Second"), "expected ordered marker, got:\n{out}");
+        // Nested ordered items should be indented
+        assert!(out.contains("  + Nested one") || out.contains("   + Nested one"),
+            "expected indented nested ordered item, got:\n{out}");
+    }
+
+    #[test]
+    fn mixed_nested_list() {
+        let md = "- Bullet\n  1. Ordered sub\n  2. Ordered sub two\n- Another bullet\n";
+        let out = render(md);
+        assert!(out.contains("- Bullet"), "got:\n{out}");
+        assert!(out.contains("- Another bullet"), "got:\n{out}");
+        // The nested ordered items should appear indented somewhere
+        assert!(out.contains("+ Ordered sub"), "expected ordered sub-item, got:\n{out}");
+    }
+
+    // ── Ordered list numbering ────────────────────────────────────────────────
+
+    #[test]
+    fn ordered_list_default_start_from_one() {
+        let md = "1. Alpha\n2. Beta\n3. Gamma\n";
+        let out = render(md);
+        // Typst uses `+` for auto-numbered ordered lists
+        assert!(out.contains("+ Alpha"), "got:\n{out}");
+        assert!(out.contains("+ Beta"), "got:\n{out}");
+        assert!(out.contains("+ Gamma"), "got:\n{out}");
+    }
+
+    #[test]
+    fn ordered_list_non_one_start() {
+        // GFM spec: list starting at 3 should preserve that start number
+        let md = "3. Third\n4. Fourth\n";
+        let out = render(md);
+        // Items are still rendered as Typst ordered markers
+        assert!(out.contains("+ Third"), "got:\n{out}");
+        assert!(out.contains("+ Fourth"), "got:\n{out}");
+    }
+
+    #[test]
+    fn ordered_list_markers_not_bullet() {
+        let md = "1. One\n2. Two\n";
+        let out = render(md);
+        // Must use `+` not `-`
+        assert!(out.contains("+ One"), "expected `+` marker, got:\n{out}");
+        assert!(!out.contains("- One"), "should not use `-` for ordered, got:\n{out}");
+    }
+
+    // ── Task lists ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn task_list_unchecked() {
+        let md = "- [ ] Task one\n- [ ] Task two\n";
+        let out = render(md);
+        // Unchecked checkbox glyph
+        assert!(out.contains("☐"), "expected ☐ for unchecked task, got:\n{out}");
+        assert!(out.contains("Task one"), "got:\n{out}");
+    }
+
+    #[test]
+    fn task_list_checked() {
+        let md = "- [x] Done task\n- [X] Also done\n";
+        let out = render(md);
+        // Checked checkbox glyph
+        assert!(out.contains("☑"), "expected ☑ for checked task, got:\n{out}");
+        assert!(out.contains("Done task"), "got:\n{out}");
+    }
+
+    #[test]
+    fn task_list_mixed() {
+        let md = "- [x] Complete\n- [ ] Incomplete\n";
+        let out = render(md);
+        assert!(out.contains("☑"), "expected checked box, got:\n{out}");
+        assert!(out.contains("☐"), "expected unchecked box, got:\n{out}");
+        assert!(out.contains("Complete"), "got:\n{out}");
+        assert!(out.contains("Incomplete"), "got:\n{out}");
+    }
+
+    #[test]
+    fn task_list_uses_bullet_not_ordered_marker() {
+        let md = "- [x] Done\n";
+        let out = render(md);
+        // Task items always use `- ` bullet marker (not `+ `)
+        assert!(out.contains("- "), "expected bullet marker for task item, got:\n{out}");
+    }
+
+    // ── Table alignment markers ───────────────────────────────────────────────
+
+    #[test]
+    fn table_left_align() {
+        let md = "| Name |\n|:-----|\n| Alice |\n";
+        let out = render(md);
+        assert!(out.contains("#table("), "got:\n{out}");
+        assert!(out.contains("align: left"), "expected left alignment, got:\n{out}");
+    }
+
+    #[test]
+    fn table_right_align() {
+        let md = "| Price |\n|------:|\n| 9.99 |\n";
+        let out = render(md);
+        assert!(out.contains("align: right"), "expected right alignment, got:\n{out}");
+    }
+
+    #[test]
+    fn table_center_align() {
+        let md = "| Status |\n|:------:|\n| OK |\n";
+        let out = render(md);
+        assert!(out.contains("align: center"), "expected center alignment, got:\n{out}");
+    }
+
+    #[test]
+    fn table_mixed_alignment() {
+        let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n";
+        let out = render(md);
+        assert!(out.contains("align: left"), "expected left, got:\n{out}");
+        assert!(out.contains("align: center"), "expected center, got:\n{out}");
+        assert!(out.contains("align: right"), "expected right, got:\n{out}");
+    }
+
+    #[test]
+    fn table_header_row_is_bold() {
+        let md = "| Col1 | Col2 |\n|------|------|\n| a | b |\n";
+        let out = render(md);
+        // Header row cells should be wrapped in #strong[…]
+        assert!(out.contains("#strong["), "expected header bold, got:\n{out}");
+    }
+
+    #[test]
+    fn table_has_fill_spec() {
+        let md = "| H |\n|---|\n| v |\n";
+        let out = render(md);
+        // fill: (col, row) => … should be present
+        assert!(out.contains("fill:"), "expected fill spec, got:\n{out}");
+    }
+
+    #[test]
+    fn table_column_count_equals_headers() {
+        let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n";
+        let out = render(md);
+        // columns: (1fr, 1fr, 1fr)
+        assert!(out.contains("1fr, 1fr, 1fr"), "expected 3 fractional columns, got:\n{out}");
+    }
+
+    // ── Autolinks ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn autolink_bare_url() {
+        // GFM autolink: bare URL becomes a link with URL as label
+        let md = "Visit https://example.com for more.\n";
+        let out = render(md);
+        assert!(out.contains("#link("), "expected link, got:\n{out}");
+        assert!(out.contains("https://example.com"), "got:\n{out}");
+    }
+
+    #[test]
+    fn autolink_angle_bracket() {
+        let md = "See <https://example.org>.\n";
+        let out = render(md);
+        assert!(out.contains("#link("), "got:\n{out}");
+        assert!(out.contains("https://example.org"), "got:\n{out}");
+    }
+
+    #[test]
+    fn autolink_compact_form_when_label_equals_url() {
+        // When the label matches the URL, we emit the compact #link(url) form.
+        let md = "<https://rust-lang.org>\n";
+        let out = render(md);
+        // Should be compact: #link("https://rust-lang.org") not #link("...", [...])
+        assert!(out.contains("#link(\"https://rust-lang.org\")"), "expected compact link, got:\n{out}");
+    }
+
+    #[test]
+    fn explicit_link_keeps_label() {
+        let md = "[Rust](https://rust-lang.org)\n";
+        let out = render(md);
+        // Has label, so should use #link(url, [label]) form
+        assert!(out.contains("#link(\"https://rust-lang.org\", [Rust])"), "got:\n{out}");
+    }
+
+    // ── Footnotes ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn footnote_reference_becomes_superscript() {
+        let md = "Text with a footnote.[^1]\n\n[^1]: The footnote body.\n";
+        let out = render(md);
+        // Reference becomes superscript
+        assert!(out.contains("#super["), "expected superscript for footnote ref, got:\n{out}");
+    }
+
+    #[test]
+    fn footnote_definition_emitted_at_end() {
+        let md = "Here[^note].\n\n[^note]: This is the note.\n";
+        let out = render(md);
+        // Definition body should appear in output (after the separator line)
+        assert!(out.contains("This is the note."), "expected footnote body, got:\n{out}");
+        // A separator line should precede the footnotes
+        assert!(out.contains("#line(length: 100%)"), "expected footnote separator line, got:\n{out}");
+    }
+
+    #[test]
+    fn multiple_footnotes_all_appear() {
+        let md = "First[^a] and second[^b].\n\n[^a]: Note A.\n\n[^b]: Note B.\n";
+        let out = render(md);
+        assert!(out.contains("Note A."), "got:\n{out}");
+        assert!(out.contains("Note B."), "got:\n{out}");
+    }
+
+    #[test]
+    fn document_without_footnotes_has_no_separator() {
+        let md = "Just plain text.\n";
+        let out = render(md);
+        // Only one line separator max (from ThematicBreak), not footnote separator
+        // Count occurrences of #line — with no footnotes there should be 0
+        let count = out.matches("#line(length: 100%)").count();
+        assert_eq!(count, 0, "unexpected footnote separator in:\n{out}");
+    }
+
+    // ── Definition (description) lists ───────────────────────────────────────
+
+    #[test]
+    fn definition_list_term_is_bold() {
+        let md = "Apple\n:   A fruit.\n";
+        let out = render(md);
+        assert!(out.contains("#strong["), "expected bold term, got:\n{out}");
+        assert!(out.contains("Apple"), "got:\n{out}");
+    }
+
+    #[test]
+    fn definition_list_details_are_indented() {
+        let md = "Term\n:   Definition text here.\n";
+        let out = render(md);
+        assert!(out.contains("#pad(left:"), "expected indented details, got:\n{out}");
+        assert!(out.contains("Definition text here."), "got:\n{out}");
+    }
+
+    #[test]
+    fn definition_list_multiple_terms() {
+        let md = "Cat\n:   A domesticated feline.\n\nDog\n:   A domesticated canine.\n";
+        let out = render(md);
+        assert!(out.contains("Cat"), "got:\n{out}");
+        assert!(out.contains("Dog"), "got:\n{out}");
+        assert!(out.contains("feline"), "got:\n{out}");
+        assert!(out.contains("canine"), "got:\n{out}");
+    }
+
+    // ── Combined GFM fixture ──────────────────────────────────────────────────
+
+    #[test]
+    fn full_gfm_fixture_roundtrip() {
+        let md = r#"# GFM Fixture
+
+## Task List
+
+- [x] Done
+- [ ] Pending
+  - [ ] Sub-task
+
+## Ordered List
+
+1. First
+2. Second
+   1. Nested A
+   2. Nested B
+3. Third
+
+## Table with Alignment
+
+| Item | Qty | Price |
+|:-----|:---:|------:|
+| Widget | 10 | 9.99 |
+| Gadget |  1 | 49.99 |
+
+## Autolinks
+
+Visit <https://example.com> or https://rust-lang.org for info.
+
+## Footnote
+
+This sentence has a note.[^fn1]
+
+[^fn1]: Footnote body text.
+
+## Definition List
+
+Markdown
+:   A lightweight markup language.
+
+Typst
+:   A modern typesetting system.
+"#;
+        let out = render(md);
+
+        // Headings
+        assert!(out.contains("= GFM Fixture"), "heading, got:\n{out}");
+
+        // Task list
+        assert!(out.contains("☑"), "checked box, got:\n{out}");
+        assert!(out.contains("☐"), "unchecked box, got:\n{out}");
+
+        // Ordered list
+        assert!(out.contains("+ First"), "ordered, got:\n{out}");
+        assert!(out.contains("+ Third"), "ordered, got:\n{out}");
+
+        // Table with alignment
+        assert!(out.contains("#table("), "table, got:\n{out}");
+        assert!(out.contains("align: right"), "right-align price col, got:\n{out}");
+        assert!(out.contains("align: center"), "center-align qty col, got:\n{out}");
+
+        // Autolinks
+        assert!(out.contains("https://example.com"), "autolink, got:\n{out}");
+
+        // Footnote
+        assert!(out.contains("#super["), "footnote ref, got:\n{out}");
+        assert!(out.contains("Footnote body text."), "footnote body, got:\n{out}");
+
+        // Definition list
+        assert!(out.contains("#strong["), "definition term bold, got:\n{out}");
+        assert!(out.contains("Markdown"), "definition term, got:\n{out}");
+        assert!(out.contains("lightweight markup language"), "definition detail, got:\n{out}");
     }
 }
