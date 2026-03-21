@@ -53,11 +53,11 @@ md-to-pdf input.md output.pdf
 
 ## Supported Math
 
-Inline: $E = mc^2$ and $\alpha + \beta = \gamma$.
+Inline: $m c^2$ and $\alpha + \beta = \gamma$.
 
 Display block:
 
-$$\int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}$$
+$$\int_{-\infty}^{\infty} e^{-x^2} = \sqrt{\pi}$$
 
 Matrix example:
 

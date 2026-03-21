@@ -847,3 +847,278 @@ fn gfm_fixture_converts_without_error() {
     assert!(src.contains("#line(length: 100%)"), "footnote section: {src}");
     assert!(src.contains("#pad(left: 1.5em)"), "definition list: {src}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New fixture file round-trips
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn fixture_mixed_content_converts_without_error() {
+    let src = convert_fixture("mixed_content.md");
+    assert!(!src.is_empty());
+    // Has headings, tables, math, footnotes
+    assert!(src.contains("= Project Overview") || src.contains("= Mixed Content Document"), "heading: {src}");
+    assert!(src.contains("#table("), "table: {src}");
+    assert!(src.contains("#super["), "footnote: {src}");
+}
+
+#[test]
+fn fixture_edge_cases_converts_without_error() {
+    let src = convert_fixture("edge_cases.md");
+    assert!(!src.is_empty());
+    // Dollar signs must be escaped throughout
+    assert!(src.contains("\\$"), "dollar escaped: {src}");
+    // Task list items present
+    assert!(src.contains("☑") || src.contains("☐"), "task items: {src}");
+}
+
+#[test]
+fn fixture_comprehensive_gfm_converts_without_error() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/comprehensive_gfm.md");
+    let md = std::fs::read_to_string(path).unwrap();
+    let dir = TempDir::new().unwrap();
+    // Let frontmatter control TOC
+    let config = RenderConfig {
+        toc: false,
+        toc_explicit: false,
+        ..cfg(&dir)
+    };
+    let src = md_to_typst(&md, &config).unwrap();
+    assert!(!src.is_empty());
+    assert!(src.contains("#outline("), "frontmatter toc:true should emit outline: {src}");
+    assert!(src.contains("depth: 3"), "toc_depth:3 from frontmatter: {src}");
+    assert!(src.contains("Contents"), "toc_title: {src}");
+    assert!(src.contains("#table("), "table: {src}");
+    assert!(src.contains("#box(width: 1em)"), "task list: {src}");
+    assert!(src.contains("#super["), "footnote refs: {src}");
+    assert!(src.contains("#strong[Markdown]") || src.contains("#strong["), "def list: {src}");
+}
+
+#[test]
+fn fixture_regression_converts_without_error() {
+    let src = convert_fixture("regression.md");
+    assert!(!src.is_empty());
+    // Dollar signs in plain text must be escaped
+    assert!(src.contains("\\$9.99"), "dollar escaping: {src}");
+    // Duplicate headings must be disambiguated
+    assert!(src.contains("<overview>"), "first overview: {src}");
+    assert!(src.contains("<overview-2>"), "second overview: {src}");
+    // Email autolink @ escaped
+    assert!(src.contains("mailto:") || src.contains("support\\@"), "email: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inline HTML extended coverage
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn inline_html_u_tag_underline() {
+    let src = convert("<u>underlined</u>\n");
+    assert!(src.contains("underlined"), "content present: {src}");
+}
+
+#[test]
+fn inline_html_s_tag_strike() {
+    let src = convert("<s>struck</s>\n");
+    assert!(src.contains("struck"), "content present: {src}");
+}
+
+#[test]
+fn inline_html_sub_sup_tags() {
+    let src = convert("H<sub>2</sub>O and x<sup>2</sup>\n");
+    assert!(src.contains("2"), "subscript/superscript digits: {src}");
+}
+
+#[test]
+fn inline_html_multiple_br_tags() {
+    let src = convert("A<br>B<br>C\n");
+    // Each <br> emits a line break
+    assert!(src.contains("A"), "A: {src}");
+    assert!(src.contains("B"), "B: {src}");
+    assert!(src.contains("C"), "C: {src}");
+}
+
+#[test]
+fn block_html_ul_list() {
+    let src = convert("<ul><li>Alpha</li><li>Beta</li></ul>\n");
+    assert!(src.contains("Alpha"), "alpha: {src}");
+    assert!(src.contains("Beta"), "beta: {src}");
+}
+
+#[test]
+fn block_html_ol_list() {
+    let src = convert("<ol><li>First</li><li>Second</li></ol>\n");
+    assert!(src.contains("First"), "first: {src}");
+    assert!(src.contains("Second"), "second: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Math translation: realistic expressions
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn math_quadratic_formula_translated() {
+    let src = convert("$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$\n");
+    assert!(src.contains("frac("), "frac: {src}");
+    assert!(src.contains("sqrt("), "sqrt: {src}");
+    assert!(src.contains("plus.minus"), "pm: {src}");
+}
+
+#[test]
+fn math_euler_identity_translated() {
+    let src = convert("$e^{i\\pi} + 1 = 0$\n");
+    assert!(src.contains("pi"), "pi: {src}");
+    // The expression passes through with e^{...}
+    assert!(src.contains("e"), "e: {src}");
+}
+
+#[test]
+fn math_maxwell_equations_display() {
+    let src = convert("$$\\nabla \\times \\mathbf{B} = \\mu_0 \\mathbf{J}$$\n");
+    assert!(src.contains("nabla"), "nabla: {src}");
+    assert!(src.contains("bold("), "mathbf: {src}");
+}
+
+#[test]
+fn math_display_block_has_surrounding_spaces() {
+    // Display math `$ expr $` must have spaces inside the outer $...$ delimiters
+    let src = convert("$$a + b = c$$\n");
+    assert!(src.contains("$ a + b = c $") || (src.contains("$ ") && src.contains(" $")),
+        "display math format: {src}");
+}
+
+#[test]
+fn math_inline_no_surrounding_spaces() {
+    // Inline math `$expr$` must NOT have spaces around the delimiters
+    let src = convert("Value: $x$.\n");
+    assert!(src.contains("$x$"), "inline math format: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: special chars in various contexts
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn regression_dollar_in_paragraph() {
+    let src = convert("Pay $9.99 or $100 dollars.\n");
+    assert!(src.contains("\\$9.99"), "9.99: {src}");
+    assert!(src.contains("\\$100"), "100: {src}");
+}
+
+#[test]
+fn regression_hash_in_paragraph() {
+    let src = convert("The #rust channel and #1 trending.\n");
+    assert!(src.contains("\\#rust") || src.contains("\\#1"), "hash escaped: {src}");
+}
+
+#[test]
+fn regression_at_in_paragraph() {
+    let src = convert("Email user@example.com for help.\n");
+    // @ should be escaped when not part of a link
+    assert!(src.contains("\\@") || src.contains("example.com"), "at sign handled: {src}");
+}
+
+#[test]
+fn regression_backslash_in_code_span() {
+    let src = convert("`C:\\Users\\name`\n");
+    // Inside inline code, the content is verbatim in backticks
+    assert!(src.contains("`C:\\Users\\name`") || src.contains("Users"), "backslash code: {src}");
+}
+
+#[test]
+fn regression_brackets_in_text() {
+    let src = convert("Typst uses [content] blocks.\n");
+    assert!(src.contains("\\[content\\]") || src.contains("content"), "brackets: {src}");
+}
+
+#[test]
+fn regression_duplicate_footnote_ref() {
+    // Referencing the same footnote twice should not duplicate the definition
+    let src = convert("First[^a] and again[^a].\n\n[^a]: The note.\n");
+    let section_parts: Vec<&str> = src.split("#line(length: 100%)").collect();
+    if section_parts.len() > 1 {
+        let footer = section_parts[1];
+        // "The note." should appear exactly once in the footer
+        let count = footer.matches("The note.").count();
+        assert_eq!(count, 1, "definition should appear once, got {count}: {footer}");
+    }
+}
+
+#[test]
+fn regression_heading_special_chars_in_label() {
+    // A heading with special chars should produce a clean label
+    let src = convert("## What's New?\n");
+    assert!(src.contains("== What"), "heading text: {src}");
+    // Label should be clean identifer chars only
+    let label_start = src.find('<').unwrap_or(0);
+    let label_end = src.find('>').unwrap_or(0);
+    if label_end > label_start {
+        let label = &src[label_start + 1..label_end];
+        assert!(label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "label should have only safe chars: {label}");
+    }
+}
+
+#[test]
+fn regression_empty_blockquote_no_crash() {
+    // A blockquote with only whitespace should not panic
+    let src = convert(">   \n");
+    assert!(src.is_ascii() || !src.is_empty(), "should not crash on empty blockquote: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page layout: different presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn layout_us_letter_preset() {
+    let dir = TempDir::new().unwrap();
+    let mut config = cfg(&dir);
+    config.page_width_mm = 215.9;
+    config.page_height_mm = 279.4;
+    let src = md_to_typst("# Letter\n\nContent.\n", &config).unwrap();
+    assert!(src.contains("215.9mm") || src.contains("215.9"), "width: {src}");
+    assert!(src.contains("279.4mm") || src.contains("279.4"), "height: {src}");
+}
+
+#[test]
+fn layout_slides_preset() {
+    let dir = TempDir::new().unwrap();
+    let mut config = cfg(&dir);
+    config.page_width_mm = 338.0;
+    config.page_height_mm = 190.0;
+    config.base_font_size_pt = 20.0;
+    let src = md_to_typst("# Slide\n\n- Point one\n", &config).unwrap();
+    assert!(src.contains("338mm") || src.contains("338"), "width: {src}");
+    assert!(src.contains("190mm") || src.contains("190"), "height: {src}");
+    assert!(src.contains("20pt"), "font size: {src}");
+}
+
+#[test]
+fn layout_large_margin() {
+    let dir = TempDir::new().unwrap();
+    let mut config = cfg(&dir);
+    config.margin_mm = 50.0;
+    let src = md_to_typst("Content.\n", &config).unwrap();
+    assert!(src.contains("50mm") || src.contains("50"), "margin: {src}");
+}
+
+#[test]
+fn layout_small_font_size() {
+    let dir = TempDir::new().unwrap();
+    let mut config = cfg(&dir);
+    config.base_font_size_pt = 8.0;
+    let src = md_to_typst("Content.\n", &config).unwrap();
+    assert!(src.contains("8pt"), "8pt font: {src}");
+}
+
+#[test]
+fn layout_code_font_size_is_fraction_of_body() {
+    let dir = TempDir::new().unwrap();
+    let config = cfg(&dir);
+    let src = md_to_typst("```rust\nfn main() {}\n```\n", &config).unwrap();
+    // code font size = base * 0.92; for 12pt base that's ~11.04pt, shown as 9pt in block
+    // The block itself uses `size: 9pt` in the highlight code
+    assert!(src.contains("9pt") || src.contains("11"), "code size: {src}");
+}

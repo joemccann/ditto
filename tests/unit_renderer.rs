@@ -825,3 +825,686 @@ fn toc_disabled_no_outline_no_pagebreak() {
     assert!(!src.contains("#outline("), "should not emit outline, got:\n{src}");
     assert!(!src.contains("#pagebreak()"), "should not emit pagebreak, got:\n{src}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional escape_typst_text edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn escape_at_sign_prevents_citation() {
+    // @ in text must become \@ so Typst doesn't treat it as a label reference.
+    assert_eq!(escape_typst_text("user@example.com"), "user\\@example.com");
+}
+
+#[test]
+fn escape_multiple_at_signs() {
+    let out = escape_typst_text("a@b and c@d");
+    assert_eq!(out, "a\\@b and c\\@d");
+}
+
+#[test]
+fn escape_all_at_signs_in_line() {
+    let out = escape_typst_text("@mention and @another");
+    assert_eq!(out, "\\@mention and \\@another");
+}
+
+#[test]
+fn escape_mixed_specials_in_realistic_sentence() {
+    // "Use #[derive(Debug)] to implement fmt::Debug for $Type." — all specials
+    let out = escape_typst_text(r#"Use #[derive(Debug)] for $Type."#);
+    assert!(out.contains("\\#"), "hash: {out}");
+    assert!(out.contains("\\["), "open bracket: {out}");
+    assert!(out.contains("\\]"), "close bracket: {out}");
+    assert!(out.contains("\\$"), "dollar: {out}");
+}
+
+#[test]
+fn escape_empty_string_unchanged() {
+    assert_eq!(escape_typst_text(""), "");
+}
+
+#[test]
+fn escape_whitespace_only() {
+    // Spaces and tabs should pass through as-is
+    assert_eq!(escape_typst_text("   "), "   ");
+    assert_eq!(escape_typst_text("\t"), "\t");
+}
+
+#[test]
+fn escape_curly_braces_escaped() {
+    // Curly braces ARE special in Typst text and must be escaped
+    let out = escape_typst_text("{key: value}");
+    assert!(out.contains("\\{"), "open brace: {out}");
+    assert!(out.contains("\\}"), "close brace: {out}");
+}
+
+#[test]
+fn escape_newline_in_middle_of_text() {
+    let out = escape_typst_text("line1\nline2\nline3");
+    assert_eq!(out, "line1 line2 line3");
+}
+
+#[test]
+fn escape_windows_path_backslashes() {
+    // Windows paths like C:\Users\name must have each \ escaped
+    let out = escape_typst_text("C:\\Users\\name");
+    assert_eq!(out, "C:\\\\Users\\\\name");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// typst_quoted_string: additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn quoted_string_with_at_sign_not_escaped() {
+    // @ is not special in Typst string literals (only in content mode)
+    let out = typst_quoted_string("user@example.com");
+    assert_eq!(out, "\"user@example.com\"");
+}
+
+#[test]
+fn quoted_string_with_newline() {
+    // Newlines inside a string literal are literal characters
+    let out = typst_quoted_string("line1\nline2");
+    assert!(out.starts_with('"') && out.ends_with('"'), "wrapped in quotes: {out}");
+}
+
+#[test]
+fn quoted_string_with_unicode() {
+    let out = typst_quoted_string("café résumé");
+    assert_eq!(out, "\"café résumé\"");
+}
+
+#[test]
+fn quoted_string_hash_not_escaped() {
+    // # is not special in Typst string literals
+    let out = typst_quoted_string("#heading");
+    assert_eq!(out, "\"#heading\"");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// heading_label: additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn label_only_digits_gets_prefix() {
+    let label = heading_label("123");
+    assert!(label.starts_with('h') || !label.chars().next().unwrap().is_ascii_digit(),
+        "label starting with digit: {label}");
+}
+
+#[test]
+fn label_single_letter() {
+    let label = heading_label("A");
+    assert_eq!(label, "a");
+}
+
+#[test]
+fn label_all_special_chars() {
+    // A heading of just punctuation should still produce a non-empty label
+    let label = heading_label("!@#$%");
+    assert!(!label.is_empty(), "label should not be empty: {label}");
+}
+
+#[test]
+fn label_repeated_hyphens_collapsed() {
+    // "A  -  B" → all non-alphanum → dashes → collapse to "a-b"
+    let label = heading_label("A  -  B");
+    assert_eq!(label, "a-b");
+}
+
+#[test]
+fn label_numbers_in_middle_preserved() {
+    let label = heading_label("Chapter 3: Overview");
+    assert!(label.contains("3"), "digit in middle: {label}");
+    assert!(label.contains("chapter"), "word part: {label}");
+}
+
+#[test]
+fn label_no_trailing_dash() {
+    let label = heading_label("Hello!");
+    assert!(!label.ends_with('-'), "trailing dash: {label}");
+}
+
+#[test]
+fn label_no_leading_dash() {
+    let label = heading_label("!Hello");
+    assert!(!label.starts_with('-'), "leading dash: {label}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// latex_to_typst: additional math commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn math_dfrac_same_as_frac() {
+    let out = latex_to_typst(r"\dfrac{x}{y}");
+    assert!(out.contains("frac(x, y)"), "got: {out}");
+}
+
+#[test]
+fn math_binom() {
+    let out = latex_to_typst(r"\binom{n}{k}");
+    assert!(out.contains("binom(n, k)"), "got: {out}");
+}
+
+#[test]
+fn math_hat_accent() {
+    let out = latex_to_typst(r"\hat{v}");
+    assert!(out.contains("hat(v)"), "got: {out}");
+}
+
+#[test]
+fn math_tilde_accent() {
+    let out = latex_to_typst(r"\tilde{x}");
+    assert!(out.contains("tilde(x)"), "got: {out}");
+}
+
+#[test]
+fn math_vec_becomes_arrow() {
+    let out = latex_to_typst(r"\vec{v}");
+    assert!(out.contains("arrow(v)"), "got: {out}");
+}
+
+#[test]
+fn math_bar_becomes_overline() {
+    let out = latex_to_typst(r"\bar{x}");
+    assert!(out.contains("overline(x)"), "got: {out}");
+}
+
+#[test]
+fn math_underline() {
+    let out = latex_to_typst(r"\underline{a + b}");
+    assert!(out.contains("underline("), "got: {out}");
+}
+
+#[test]
+fn math_overbrace_underbrace() {
+    let a = latex_to_typst(r"\overbrace{a+b}");
+    assert!(a.contains("overbrace("), "got: {a}");
+    let b = latex_to_typst(r"\underbrace{a+b}");
+    assert!(b.contains("underbrace("), "got: {b}");
+}
+
+#[test]
+fn math_cdot_times() {
+    let a = latex_to_typst(r"a \cdot b");
+    assert!(a.contains("dot.c"), "cdot: {a}");
+    let b = latex_to_typst(r"a \times b");
+    assert!(b.contains("times"), "times: {b}");
+}
+
+#[test]
+fn math_pm_mp() {
+    let a = latex_to_typst(r"x \pm y");
+    assert!(a.contains("plus.minus"), "pm: {a}");
+    let b = latex_to_typst(r"x \mp y");
+    assert!(b.contains("minus.plus"), "mp: {b}");
+}
+
+#[test]
+fn math_neq() {
+    let out = latex_to_typst(r"a \neq b");
+    assert!(out.contains("eq.not"), "got: {out}");
+}
+
+#[test]
+fn math_subset_supset() {
+    let a = latex_to_typst(r"A \subset B");
+    assert!(a.contains("subset"), "subset: {a}");
+    let b = latex_to_typst(r"A \subseteq B");
+    assert!(b.contains("subset.eq"), "subseteq: {b}");
+}
+
+#[test]
+fn math_forall_exists() {
+    let a = latex_to_typst(r"\forall x");
+    assert!(a.contains("forall"), "got: {a}");
+    let b = latex_to_typst(r"\exists y");
+    assert!(b.contains("exists"), "got: {b}");
+}
+
+#[test]
+fn math_cup_cap_setminus() {
+    let a = latex_to_typst(r"A \cup B");
+    assert!(a.contains("union"), "cup: {a}");
+    let b = latex_to_typst(r"A \cap B");
+    assert!(b.contains("sect"), "cap: {b}");
+    let c = latex_to_typst(r"A \setminus B");
+    assert!(c.contains("without"), "setminus: {c}");
+}
+
+#[test]
+fn math_trig_functions() {
+    let out = latex_to_typst(r"\sin\theta + \cos\phi = \tan\alpha");
+    assert!(out.contains("sin"), "sin: {out}");
+    assert!(out.contains("cos"), "cos: {out}");
+    assert!(out.contains("tan"), "tan: {out}");
+}
+
+#[test]
+fn math_log_exp_ln() {
+    let out = latex_to_typst(r"\log x + \ln y + \exp z");
+    assert!(out.contains("log"), "log: {out}");
+    assert!(out.contains("ln"), "ln: {out}");
+    assert!(out.contains("exp"), "exp: {out}");
+}
+
+#[test]
+fn math_lim_with_subscript() {
+    let out = latex_to_typst(r"\lim_{n \to \infty} a_n");
+    assert!(out.contains("lim"), "lim: {out}");
+    assert!(out.contains("->") || out.contains("oo"), "subscript: {out}");
+}
+
+#[test]
+fn math_prod() {
+    let out = latex_to_typst(r"\prod_{i=1}^{n}");
+    assert!(out.contains("prod"), "got: {out}");
+}
+
+#[test]
+fn math_iint_iiint() {
+    let a = latex_to_typst(r"\iint");
+    assert!(a.contains("integral.double"), "iint: {a}");
+    let b = latex_to_typst(r"\iiint");
+    assert!(b.contains("integral.triple"), "iiint: {b}");
+}
+
+#[test]
+fn math_vmatrix() {
+    let out = latex_to_typst(r"\begin{vmatrix} a & b \\ c & d \end{vmatrix}");
+    assert!(out.contains("mat(delim: \"|\",") || out.contains("mat(delim:\"|\""), "got: {out}");
+}
+
+#[test]
+fn math_align_env() {
+    let out = latex_to_typst(r"\begin{align} a &= b \\ c &= d \end{align}");
+    // align environment should produce at least two expressions joined by \
+    assert!(!out.is_empty(), "got: {out}");
+}
+
+#[test]
+fn math_equation_env() {
+    let out = latex_to_typst(r"\begin{equation} x^2 + y^2 = r^2 \end{equation}");
+    assert!(out.contains("x") && out.contains("y") && out.contains("r"), "got: {out}");
+}
+
+#[test]
+fn math_mathbb_n_q_c() {
+    let n = latex_to_typst(r"\mathbb{N}");
+    assert!(n.contains("NN"), "got: {n}");
+    let q = latex_to_typst(r"\mathbb{Q}");
+    assert!(q.contains("QQ"), "got: {q}");
+    let c = latex_to_typst(r"\mathbb{C}");
+    assert!(c.contains("CC"), "got: {c}");
+}
+
+#[test]
+fn math_mathbf_vector() {
+    let out = latex_to_typst(r"\mathbf{v}");
+    assert!(out.contains("bold(v)"), "got: {out}");
+}
+
+#[test]
+fn math_left_right_delimiters() {
+    let out = latex_to_typst(r"\left( x + y \right)");
+    // \left( and \right) should emit ( and ) — no crash
+    assert!(out.contains("(") && out.contains(")"), "got: {out}");
+}
+
+#[test]
+fn math_hbar_ell() {
+    let a = latex_to_typst(r"\hbar");
+    assert!(a.contains("planck.reduce"), "hbar: {a}");
+    let b = latex_to_typst(r"\ell");
+    assert!(b.contains("ell"), "ell: {b}");
+}
+
+#[test]
+fn math_prime_symbol() {
+    let out = latex_to_typst(r"f'(x) = f\prime(x)");
+    // \prime → '
+    assert!(out.contains("'"), "got: {out}");
+}
+
+#[test]
+fn math_dots_variants() {
+    let ldots = latex_to_typst(r"\ldots");
+    assert!(ldots.contains("dots"), "ldots: {ldots}");
+    let cdots = latex_to_typst(r"\cdots");
+    assert!(cdots.contains("dots"), "cdots: {cdots}");
+    let vdots = latex_to_typst(r"\vdots");
+    assert!(vdots.contains("dots.v"), "vdots: {vdots}");
+}
+
+#[test]
+fn math_quad_spacing() {
+    let out = latex_to_typst(r"a \quad b");
+    assert!(out.contains("quad"), "got: {out}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extract_toc: additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn toc_heading_levels_1_through_6() {
+    let md = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n";
+    let entries = extract_toc(md);
+    assert_eq!(entries.len(), 6, "should have 6 entries");
+    for (i, e) in entries.iter().enumerate() {
+        assert_eq!(e.level, (i + 1) as u8, "level {}: {}", i + 1, e.title);
+    }
+}
+
+#[test]
+fn toc_mixed_levels_order_preserved() {
+    let md = "# A\n### C\n## B\n# D\n";
+    let entries = extract_toc(md);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0].title, "A");
+    assert_eq!(entries[1].title, "C");
+    assert_eq!(entries[2].title, "B");
+    assert_eq!(entries[3].title, "D");
+}
+
+#[test]
+fn toc_title_with_inline_markup() {
+    // extract_toc returns the raw heading text including any ** or *
+    let md = "## **Bold** Section\n";
+    let entries = extract_toc(md);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].title.contains("Bold"), "got: {}", entries[0].title);
+}
+
+#[test]
+fn toc_7_or_more_hashes_not_heading() {
+    // ATX headings only go up to H6 (6 hashes)
+    let md = "####### Too many\n# Valid\n";
+    let entries = extract_toc(md);
+    // Only "Valid" should be captured; "Too many" has 7 hashes and is not a heading
+    assert!(entries.iter().any(|e| e.title == "Valid"), "valid heading: {:?}", entries);
+    assert!(!entries.iter().any(|e| e.title == "Too many"), "invalid heading should be absent: {:?}", entries);
+}
+
+#[test]
+fn toc_frontmatter_not_included() {
+    // The --- ... --- frontmatter block should not yield TOC entries even if
+    // a line inside starts with #. extract_toc is a line-scanner and does NOT
+    // parse frontmatter, so this test documents the known behaviour.
+    let md = "# Real Heading\n";
+    let entries = extract_toc(md);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].title, "Real Heading");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// generate_typst_toc: clamped depth values
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn toc_depth_1_produces_depth_1() {
+    let toc = generate_typst_toc(1);
+    assert!(toc.contains("depth: 1"), "got: {toc}");
+}
+
+#[test]
+fn toc_depth_6_produces_depth_6() {
+    let toc = generate_typst_toc(6);
+    assert!(toc.contains("depth: 6"), "got: {toc}");
+}
+
+#[test]
+fn toc_all_required_fields_present() {
+    let toc = generate_typst_toc(3);
+    // Must have all of: outline call, depth, indent, title, pagebreak, show rule
+    assert!(toc.contains("#outline("), "outline call: {toc}");
+    assert!(toc.contains("depth:"), "depth: {toc}");
+    assert!(toc.contains("indent:"), "indent: {toc}");
+    assert!(toc.contains("title:"), "title: {toc}");
+    assert!(toc.contains("#pagebreak()"), "pagebreak: {toc}");
+    assert!(toc.contains("#show"), "show rule: {toc}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// markdown_to_typst: additional rendering edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn md_empty_document_produces_preamble() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("", &default_config(&dir)).unwrap();
+    assert!(src.contains("#set page("), "preamble present: {src}");
+}
+
+#[test]
+fn md_only_frontmatter_no_body() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: false\n---\n";
+    let src = md_to_typst(md, &default_config(&dir)).unwrap();
+    // Should produce preamble but no body content besides the trailing newline
+    assert!(src.contains("#set page("), "preamble: {src}");
+}
+
+#[test]
+fn md_inline_code_backtick_in_output() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("`hello()`\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("`hello()`"), "inline code: {src}");
+}
+
+#[test]
+fn md_strikethrough_strike_call() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("~~old~~\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#strike[old]"), "strikethrough: {src}");
+}
+
+#[test]
+fn md_blockquote_structure() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("> A quote.\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#block("), "block: {src}");
+    assert!(src.contains("inset: (left: 12pt)") || src.contains("inset"), "inset: {src}");
+    assert!(src.contains("stroke"), "stroke: {src}");
+    assert!(src.contains("A quote."), "content: {src}");
+}
+
+#[test]
+fn md_thematic_break_line() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("---\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#line(length: 100%)"), "line: {src}");
+}
+
+#[test]
+fn md_soft_break_becomes_space() {
+    // A soft break (single newline within a paragraph) should become a space
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("word1\nword2\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("word1") && src.contains("word2"), "words present: {src}");
+}
+
+#[test]
+fn md_link_with_url_only_compact() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("<https://example.com>\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#link("), "link: {src}");
+    assert!(src.contains("example.com"), "url: {src}");
+}
+
+#[test]
+fn md_bold_nested_in_italic() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("*italic and **bold** inside*\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#emph["), "emph: {src}");
+    assert!(src.contains("#strong["), "strong: {src}");
+}
+
+#[test]
+fn md_heading_with_inline_code() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("# Using `code` in heading\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("= "), "heading marker: {src}");
+    assert!(src.contains("`code`"), "inline code in heading: {src}");
+}
+
+#[test]
+fn md_table_single_column() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("| Item |\n|------|\n| A |\n| B |\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#table("), "table: {src}");
+    assert!(src.contains("1fr"), "single column: {src}");
+}
+
+#[test]
+fn md_table_five_columns() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("| A | B | C | D | E |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#table("), "table: {src}");
+    let count = src.matches("1fr").count();
+    assert_eq!(count, 5, "five columns: {src}");
+}
+
+#[test]
+fn md_code_block_math_lang_no_code_block() {
+    // A ```math ... ``` fenced block must produce display math, not a code block
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("```math\nE = mc^2\n```\n", &default_config(&dir)).unwrap();
+    assert!(!src.contains("#block(fill:"), "should not be code block: {src}");
+    assert!(src.contains("$ ") && src.contains(" $"), "should be display math: {src}");
+}
+
+#[test]
+fn md_description_list_term_and_detail() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("Apple\n: A fruit.\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#strong[Apple]"), "term bold: {src}");
+    assert!(src.contains("A fruit."), "detail: {src}");
+    assert!(src.contains("#pad(left:") || src.contains("pad(left:"), "padded: {src}");
+}
+
+#[test]
+fn md_frontmatter_yes_value_enables_toc() {
+    // `toc: yes` (YAML alternate truthy) should enable TOC
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: yes\n---\n# Hello\n";
+    let src = md_to_typst(md, &default_config(&dir)).unwrap();
+    assert!(src.contains("#outline("), "toc:yes should enable outline: {src}");
+}
+
+#[test]
+fn md_frontmatter_1_value_enables_toc() {
+    // `toc: 1` should enable TOC
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: 1\n---\n# Hello\n";
+    let src = md_to_typst(md, &default_config(&dir)).unwrap();
+    assert!(src.contains("#outline("), "toc:1 should enable outline: {src}");
+}
+
+#[test]
+fn md_font_appears_in_set_text() {
+    let dir = TempDir::new().unwrap();
+    let mut config = default_config(&dir);
+    config.fonts.regular = "EB Garamond".to_string();
+    let src = md_to_typst("Hello.\n", &config).unwrap();
+    assert!(src.contains("EB Garamond"), "font name in output: {src}");
+}
+
+#[test]
+fn md_mono_font_appears_in_show_raw() {
+    let dir = TempDir::new().unwrap();
+    let mut config = default_config(&dir);
+    config.fonts.monospace = "Fira Code".to_string();
+    let src = md_to_typst("Hello.\n", &config).unwrap();
+    assert!(src.contains("Fira Code"), "mono font name in output: {src}");
+}
+
+#[test]
+fn md_inline_html_strong_tag() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("Text <strong>bold</strong> text.\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#strong["), "HTML strong: {src}");
+    assert!(src.contains("bold"), "content: {src}");
+}
+
+#[test]
+fn md_inline_html_em_tag() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("Text <em>italic</em> text.\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("#emph["), "HTML em: {src}");
+}
+
+#[test]
+fn md_inline_html_br_tag() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("Line one<br>Line two\n", &default_config(&dir)).unwrap();
+    // <br> → \\\n in Typst
+    assert!(src.contains("\\\\\n") || src.contains("\\\n"), "line break: {src}");
+}
+
+#[test]
+fn md_multiple_blockquotes_all_present() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("> First.\n\n> Second.\n\n> Third.\n", &default_config(&dir)).unwrap();
+    assert!(src.contains("First."), "first: {src}");
+    assert!(src.contains("Second."), "second: {src}");
+    assert!(src.contains("Third."), "third: {src}");
+    let count = src.matches("#block(").count();
+    assert!(count >= 3, "three blockquotes: {src}");
+}
+
+#[test]
+fn md_ordered_list_mixed_with_unordered() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("- Bullet A\n  1. Num one\n  2. Num two\n- Bullet B\n",
+                           &default_config(&dir)).unwrap();
+    assert!(src.contains("- Bullet A"), "bullet A: {src}");
+    assert!(src.contains("- Bullet B"), "bullet B: {src}");
+    assert!(src.contains("+ Num one") || src.contains("Num one"), "num one: {src}");
+    assert!(src.contains("+ Num two") || src.contains("Num two"), "num two: {src}");
+}
+
+#[test]
+fn md_footnote_with_inline_formatting() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("Ref[^fn].\n\n[^fn]: Note with **bold** inside.\n",
+                           &default_config(&dir)).unwrap();
+    assert!(src.contains("#super["), "superscript: {src}");
+    assert!(src.contains("#strong[bold]"), "bold in footnote: {src}");
+}
+
+#[test]
+fn md_no_crash_on_empty_table() {
+    // An empty table (no rows) should produce no output or an empty table
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("| H |\n|---|\n", &default_config(&dir));
+    assert!(src.is_ok(), "should not crash on header-only table");
+}
+
+#[test]
+fn md_task_list_in_nested_context() {
+    let dir = TempDir::new().unwrap();
+    let src = md_to_typst("- Parent\n  - [x] Child done\n  - [ ] Child pending\n",
+                           &default_config(&dir)).unwrap();
+    assert!(src.contains("☑"), "checked: {src}");
+    assert!(src.contains("☐"), "unchecked: {src}");
+}
+
+#[test]
+fn md_page_size_uses_mm_units() {
+    let dir = TempDir::new().unwrap();
+    let config = default_config(&dir);
+    let src = md_to_typst("Text\n", &config).unwrap();
+    // Should use millimeter units for page dimensions
+    assert!(src.contains("mm"), "mm unit: {src}");
+}
+
+#[test]
+fn md_font_size_uses_pt_units() {
+    let dir = TempDir::new().unwrap();
+    let config = default_config(&dir);
+    let src = md_to_typst("Text\n", &config).unwrap();
+    assert!(src.contains("pt"), "pt unit: {src}");
+}

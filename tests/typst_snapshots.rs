@@ -475,3 +475,300 @@ fn snapshot_gfm_fixture() {
     assert!(src.contains("#strong[Markdown]") || src.contains("Markdown"), "def list term: {src}");
     assert!(src.contains("#pad(left: 1.5em)"), "def list detail padded: {src}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional snapshots for math environments
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn snapshot_math_aligned_env() {
+    let src = snapshot(
+        "math_aligned",
+        "$$\\begin{align} a &= b + c \\\\ d &= e + f \\end{align}$$\n",
+    );
+    // align environment produces at least something non-empty
+    assert!(src.contains("$ ") && src.contains(" $"), "display math: {src}");
+}
+
+#[test]
+fn snapshot_math_vmatrix() {
+    let src = snapshot(
+        "math_vmatrix",
+        "$$\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}$$\n",
+    );
+    assert!(src.contains("mat("), "mat call: {src}");
+}
+
+#[test]
+fn snapshot_math_greek_full() {
+    let src = snapshot(
+        "math_greek_full",
+        "$\\alpha \\beta \\gamma \\delta \\epsilon \\zeta \\eta \\theta$\n",
+    );
+    assert!(src.contains("alpha"), "alpha: {src}");
+    assert!(src.contains("beta"), "beta: {src}");
+    assert!(src.contains("gamma"), "gamma: {src}");
+    assert!(src.contains("delta"), "delta: {src}");
+}
+
+#[test]
+fn snapshot_math_operators() {
+    let src = snapshot(
+        "math_operators",
+        "$a \\leq b \\geq c \\neq d \\approx e$\n",
+    );
+    assert!(src.contains("lt.eq"), "leq: {src}");
+    assert!(src.contains("gt.eq"), "geq: {src}");
+    assert!(src.contains("eq.not"), "neq: {src}");
+    assert!(src.contains("approx"), "approx: {src}");
+}
+
+#[test]
+fn snapshot_math_blackboard_bold() {
+    let src = snapshot(
+        "math_blackboard_bold",
+        "$\\mathbb{R} \\cup \\mathbb{Z} \\subset \\mathbb{C}$\n",
+    );
+    assert!(src.contains("RR"), "RR: {src}");
+    assert!(src.contains("ZZ"), "ZZ: {src}");
+    assert!(src.contains("CC"), "CC: {src}");
+}
+
+#[test]
+fn snapshot_math_sum_limits() {
+    let src = snapshot(
+        "math_sum_limits",
+        "$$\\sum_{k=0}^{n} \\binom{n}{k} = 2^n$$\n",
+    );
+    assert!(src.contains("sum"), "sum: {src}");
+    assert!(src.contains("binom("), "binom: {src}");
+}
+
+#[test]
+fn snapshot_math_integral_limits() {
+    let src = snapshot(
+        "math_integral_limits",
+        "$$\\int_0^{\\infty} e^{-x} \\, dx = 1$$\n",
+    );
+    assert!(src.contains("integral"), "integral: {src}");
+    assert!(src.contains("oo"), "infinity: {src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional snapshots for GFM elements
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn snapshot_mixed_list_types() {
+    let src = snapshot(
+        "mixed_list_types",
+        "- Category A\n  1. Sub one\n  2. Sub two\n- Category B\n  1. Sub one\n",
+    );
+    assert!(src.contains("- Category A"), "bullet A: {src}");
+    assert!(src.contains("- Category B"), "bullet B: {src}");
+    assert!(src.contains("+ Sub one") || src.contains("Sub one"), "sub item: {src}");
+}
+
+#[test]
+fn snapshot_ordered_list_start_5() {
+    let src = snapshot(
+        "ordered_list_start_5",
+        "5. Fifth\n6. Sixth\n7. Seventh\n",
+    );
+    assert!(
+        src.contains("start: 5") || src.contains("#set enum(start: 5)"),
+        "start:5 directive: {src}"
+    );
+    assert!(src.contains("+ Fifth"), "item: {src}");
+}
+
+#[test]
+fn snapshot_table_wide() {
+    let src = snapshot(
+        "table_wide",
+        "| ID | Name | Email | Role | Active |\n\
+         |----|------|-------|------|--------|\n\
+         | 1 | Alice | alice@example.com | Admin | Yes |\n\
+         | 2 | Bob | bob@example.com | User | No |\n",
+    );
+    assert!(src.contains("#table("), "table: {src}");
+    let count = src.matches("1fr").count();
+    assert_eq!(count, 5, "five columns: {src}");
+    assert!(src.contains("Alice"), "data: {src}");
+}
+
+#[test]
+fn snapshot_table_formatted_cells() {
+    let src = snapshot(
+        "table_formatted_cells",
+        "| Feature | Status |\n|---------|--------|\n\
+         | **Bold** | ✅ |\n| *Italic* | ✅ |\n| `Code` | ✅ |\n",
+    );
+    assert!(src.contains("#table("), "table: {src}");
+    // Cell content with formatting
+    assert!(src.contains("Bold") || src.contains("#strong["), "bold in cell: {src}");
+}
+
+#[test]
+fn snapshot_code_block_typescript() {
+    let src = snapshot(
+        "code_block_typescript",
+        "```typescript\ninterface User { id: number; name: string; }\n\
+         async function get(id: number): Promise<User> {\n    return fetch(`/users/${id}`);\n}\n```\n",
+    );
+    assert!(src.contains("#block("), "block: {src}");
+    assert!(src.contains("DejaVu Sans Mono"), "mono font: {src}");
+}
+
+#[test]
+fn snapshot_code_block_sql() {
+    let src = snapshot(
+        "code_block_sql",
+        "```sql\nSELECT name, COUNT(*) FROM users GROUP BY name ORDER BY 2 DESC;\n```\n",
+    );
+    assert!(src.contains("#block("), "block: {src}");
+    assert!(src.contains("DejaVu Sans Mono"), "mono font: {src}");
+}
+
+#[test]
+fn snapshot_code_block_bash() {
+    let src = snapshot(
+        "code_block_bash",
+        "```bash\n#!/usr/bin/env bash\nset -euo pipefail\necho 'Hello, world!'\n```\n",
+    );
+    assert!(src.contains("#block("), "block: {src}");
+}
+
+#[test]
+fn snapshot_code_block_javascript() {
+    let src = snapshot(
+        "code_block_javascript",
+        "```javascript\nconst greet = (name) => `Hello, ${name}!`;\nconsole.log(greet('World'));\n```\n",
+    );
+    assert!(src.contains("#block("), "block: {src}");
+}
+
+#[test]
+fn snapshot_nested_task_list_deep() {
+    let src = snapshot(
+        "nested_task_list_deep",
+        "- [x] Root done\n  - [ ] Level 2 pending\n    - [x] Level 3 done\n",
+    );
+    assert!(src.contains("☑"), "checked: {src}");
+    assert!(src.contains("☐"), "unchecked: {src}");
+    // Three checkbox items at varying indentation levels
+    let box_count = src.matches("#box(width: 1em)").count();
+    assert!(box_count >= 3, "at least 3 checkbox items: {src}");
+}
+
+#[test]
+fn snapshot_multiple_footnotes_ordered() {
+    let src = snapshot(
+        "multiple_footnotes_ordered",
+        "Alpha[^a]. Beta[^b]. Gamma[^c].\n\n\
+         [^a]: A definition.\n\n\
+         [^b]: B definition.\n\n\
+         [^c]: C definition.\n",
+    );
+    // All three footnotes must appear with correct numbering
+    assert!(src.contains("#super[1]"), "super 1: {src}");
+    assert!(src.contains("#super[2]"), "super 2: {src}");
+    assert!(src.contains("#super[3]"), "super 3: {src}");
+    // Footer section present
+    assert!(src.contains("#line(length: 100%)"), "separator: {src}");
+    assert!(src.contains("A definition."), "A def: {src}");
+    assert!(src.contains("B definition."), "B def: {src}");
+    assert!(src.contains("C definition."), "C def: {src}");
+}
+
+#[test]
+fn snapshot_definition_list_complex() {
+    let src = snapshot(
+        "definition_list_complex",
+        "Term A\n: First detail for A.\n: Second detail for A.\n\n\
+         Term B\n: Only detail for B.\n",
+    );
+    assert!(src.contains("#strong[Term A]"), "term A: {src}");
+    assert!(src.contains("#strong[Term B]"), "term B: {src}");
+    assert!(src.contains("First detail for A."), "first detail: {src}");
+    assert!(src.contains("Second detail for A."), "second detail: {src}");
+    assert!(src.contains("Only detail for B."), "B detail: {src}");
+    let pad_count = src.matches("#pad(left: 1.5em)").count();
+    assert!(pad_count >= 3, "three padded details: {src}");
+}
+
+#[test]
+fn snapshot_blockquote_with_formatting() {
+    let src = snapshot(
+        "blockquote_with_formatting",
+        "> **Bold** text and *italic* and `code` inside a blockquote.\n",
+    );
+    assert!(src.contains("#block("), "block: {src}");
+    assert!(src.contains("#strong["), "strong: {src}");
+    assert!(src.contains("#emph["), "emph: {src}");
+}
+
+#[test]
+fn snapshot_inline_math_in_table() {
+    let src = snapshot(
+        "inline_math_in_table",
+        "| Expression | Description |\n|------------|-------------|\n\
+         | $x^2$ | quadratic |\n| $\\sqrt{x}$ | square root |\n",
+    );
+    assert!(src.contains("#table("), "table: {src}");
+    // Math expressions should appear in cell content
+    assert!(src.contains("$x^2$") || src.contains("x^2"), "x^2: {src}");
+    assert!(src.contains("sqrt(") || src.contains("\\sqrt"), "sqrt: {src}");
+}
+
+#[test]
+fn snapshot_comprehensive_gfm() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/comprehensive_gfm.md");
+    let md = std::fs::read_to_string(path).expect("comprehensive_gfm.md must exist");
+    let dir = TempDir::new().unwrap();
+    let mut config = cfg(&dir);
+    config.toc = false; // let frontmatter control
+    config.toc_explicit = false;
+    let src = md_to_typst(&md, &config).unwrap();
+
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/snapshots");
+    std::fs::create_dir_all(&snap_dir).ok();
+    let snap_path = snap_dir.join("comprehensive_gfm.typ");
+    if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !snap_path.exists() {
+        std::fs::write(&snap_path, &src).ok();
+    }
+
+    // All major GFM features should be present
+    assert!(src.contains("#outline("), "TOC from frontmatter: {src}");
+    assert!(src.contains("depth: 3"), "TOC depth: {src}");
+    assert!(src.contains("Contents"), "TOC title: {src}");
+    assert!(src.contains("#table("), "table: {src}");
+    assert!(src.contains("#box(width: 1em)"), "task list: {src}");
+    assert!(src.contains("#super["), "footnote: {src}");
+    assert!(src.contains("#strong["), "def list or bold: {src}");
+}
+
+#[test]
+fn snapshot_regression_dollar_signs() {
+    let src = snapshot(
+        "regression_dollar_signs",
+        "Price: $9.99 and $100 are both dollar amounts.\n\nMath: $x^2 + y^2 = r^2$\n",
+    );
+    // Dollar signs in plain text must be escaped
+    assert!(src.contains("\\$9.99"), "dollar escape: {src}");
+    assert!(src.contains("\\$100"), "dollar escape: {src}");
+    // But math dollars should NOT be escaped (they're Typst math)
+    assert!(src.contains("$x^2"), "math not escaped: {src}");
+}
+
+#[test]
+fn snapshot_regression_at_sign() {
+    let src = snapshot(
+        "regression_at_sign",
+        "Email user@example.com or admin@test.org for help.\n",
+    );
+    // @ in plain text must be escaped
+    assert!(src.contains("\\@"), "at sign escaped: {src}");
+}
