@@ -8,7 +8,7 @@ toc: false
 
 Euler's identity: $e^{i\pi} + 1 = 0$.
 
-Quadratic formula: $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$.
+Quadratic formula: $x = \frac{-b \pm \sqrt{b^2 - 4 a c}}{2a}$.
 
 Greek letters: $\alpha + \beta = \gamma$, $\Delta x \to 0$.
 
@@ -16,7 +16,7 @@ Blackboard bold: $\mathbb{R}$, $\mathbb{Z}$, $\mathbb{N}$.
 
 ## Display Math
 
-$$\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}$$
+$$\int_{-\infty}^{\infty} e^{-x^2}\,d x = \sqrt{\pi}$$
 
 $$\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}$$
 
@@ -24,7 +24,7 @@ $$\nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0\epsilon_0 \frac{\partial \
 
 ## Matrices
 
-$$\begin{pmatrix} a & b \\ c & d \end{pmatrix} \begin{pmatrix} x \\ y \end{pmatrix} = \begin{pmatrix} ax+by \\ cx+dy \end{pmatrix}$$
+$$\begin{pmatrix} a & b \\ c & d \end{pmatrix} \begin{pmatrix} x \\ y \end{pmatrix} = \begin{pmatrix} a x+b y \\ c x+d y \end{pmatrix}$$
 
 ## Piecewise (Cases)
 
@@ -41,5 +41,5 @@ $\frac{\partial^2 u}{\partial t^2} = c^2 \nabla^2 u$
 ## Fenced Math Block
 
 ```math
-E = mc^2
+E = m c^2
 ```

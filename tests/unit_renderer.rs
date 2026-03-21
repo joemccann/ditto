@@ -9,6 +9,7 @@ use md_to_pdf::renderer::{
     escape_typst_text_pub as escape_typst_text,
     extract_toc_pub as extract_toc,
     generate_typst_toc_pub as generate_typst_toc,
+    generate_typst_toc_titled_pub as generate_typst_toc_titled,
     heading_label_pub as heading_label,
     latex_to_typst_pub as latex_to_typst,
     markdown_to_typst_pub as md_to_typst,
@@ -88,6 +89,20 @@ fn escape_all_specials_combined() {
     assert!(out.contains("\\#"), "hash: {out}");
     assert!(out.contains("\\["), "open bracket: {out}");
     assert!(out.contains("\\]"), "close bracket: {out}");
+}
+
+#[test]
+fn escape_dollar_sign_prevents_math_mode() {
+    // A bare `$` in plain text must become `\$` so Typst doesn't enter math mode.
+    // The classic case: prices like "$9.99" in a paragraph.
+    assert_eq!(escape_typst_text("$9.99"), "\\$9.99");
+}
+
+#[test]
+fn escape_dollar_pair_does_not_create_math_mode() {
+    // Two dollar signs in plain text (e.g. "$100 and $200") must both be escaped.
+    let out = escape_typst_text("$100 and $200");
+    assert_eq!(out, "\\$100 and \\$200");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -522,4 +537,291 @@ fn typst_source_custom_page_size() {
     assert!(src.contains("338mm") || src.contains("338"), "got:\n{src}");
     assert!(src.contains("190mm") || src.contains("190"), "got:\n{src}");
     assert!(src.contains("12mm") || src.contains("12"), "got:\n{src}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOC improvements: page-numbered outline, clickable nav, depth, title, no_toc
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── generate_typst_toc: page-break and styling ────────────────────────────────
+
+#[test]
+fn toc_emits_pagebreak_after_outline() {
+    let toc = generate_typst_toc(3);
+    // A #pagebreak() must follow the outline so body content starts on a fresh page.
+    assert!(toc.contains("#pagebreak()"), "expected #pagebreak() after outline, got:\n{toc}");
+}
+
+#[test]
+fn toc_pagebreak_comes_after_outline_block() {
+    let toc = generate_typst_toc(3);
+    let outline_pos = toc.find("#outline(").expect("#outline() not found");
+    let break_pos   = toc.find("#pagebreak()").expect("#pagebreak() not found");
+    assert!(break_pos > outline_pos, "#pagebreak() should come after #outline()");
+}
+
+#[test]
+fn toc_h1_entries_bold_via_show_rule() {
+    // The `#show outline.entry.where(level: 1)` rule wraps H1 entries in strong().
+    let toc = generate_typst_toc(3);
+    assert!(toc.contains("outline.entry.where(level: 1)"),
+        "expected show rule for H1 entries, got:\n{toc}");
+    assert!(toc.contains("strong("), "expected strong() in show rule, got:\n{toc}");
+}
+
+#[test]
+fn toc_indent_parameter_present() {
+    let toc = generate_typst_toc(3);
+    assert!(toc.contains("indent:"), "expected indent: parameter, got:\n{toc}");
+}
+
+// ── Custom TOC title via generate_typst_toc_titled ───────────────────────────
+
+#[test]
+fn toc_custom_title_appears_in_outline() {
+    let toc = generate_typst_toc_titled(3, "Contents");
+    assert!(toc.contains("Contents"), "expected custom title, got:\n{toc}");
+    assert!(!toc.contains("Table of Contents"), "should not have default title, got:\n{toc}");
+}
+
+#[test]
+fn toc_custom_title_special_chars_escaped() {
+    // Typst-special chars in the title must be escaped.
+    let toc = generate_typst_toc_titled(2, "My #Doc");
+    assert!(toc.contains("\\#Doc"), "hash in title should be escaped, got:\n{toc}");
+}
+
+#[test]
+fn toc_default_title_is_table_of_contents() {
+    let toc = generate_typst_toc(2);
+    assert!(toc.contains("Table of Contents"), "default title should be 'Table of Contents', got:\n{toc}");
+}
+
+// ── `toc_title` frontmatter key ───────────────────────────────────────────────
+
+#[test]
+fn frontmatter_toc_title_overrides_default() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\ntoc_title: My Document Index\n---\n# Hello\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("My Document Index"), "expected custom toc_title, got:\n{src}");
+    assert!(!src.contains("Table of Contents"), "should not use default title, got:\n{src}");
+}
+
+#[test]
+fn frontmatter_toc_title_quoted_value() {
+    // toc_title: "Quoted Title" — quotes should be stripped
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\ntoc_title: \"My Index\"\n---\n# Hello\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("My Index"), "expected unquoted title in output, got:\n{src}");
+}
+
+#[test]
+fn frontmatter_toc_title_without_toc_has_no_effect() {
+    // toc_title only matters when a TOC is actually rendered.
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc_title: Hidden\n---\n# Hello\n";
+    let mut config = default_config(&dir);
+    config.toc = false;
+    config.toc_explicit = true;
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(!src.contains("#outline("), "no TOC should be emitted, got:\n{src}");
+}
+
+// ── `no_toc` frontmatter key ──────────────────────────────────────────────────
+
+#[test]
+fn frontmatter_no_toc_true_suppresses_outline() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\nno_toc: true\n---\n# Hello\n";
+    let mut config = default_config(&dir);
+    config.toc = true;          // default would emit TOC
+    config.toc_explicit = false; // but not explicit → frontmatter wins
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(!src.contains("#outline("),
+        "no_toc: true should suppress outline, got:\n{src}");
+}
+
+#[test]
+fn frontmatter_no_toc_false_does_not_suppress() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\nno_toc: false\n---\n# Hello\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("#outline("),
+        "no_toc: false should not suppress outline, got:\n{src}");
+}
+
+#[test]
+fn frontmatter_no_toc_and_toc_both_true_no_toc_wins() {
+    // When both `toc: true` and `no_toc: true` are present, `no_toc` wins.
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\nno_toc: true\n---\n# Hello\n";
+    let mut config = default_config(&dir);
+    config.toc_explicit = false;
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(!src.contains("#outline("),
+        "no_toc: true should override toc: true, got:\n{src}");
+}
+
+#[test]
+fn frontmatter_no_toc_cli_explicit_still_wins() {
+    // When CLI explicitly enables TOC, frontmatter no_toc should not override.
+    let dir = TempDir::new().unwrap();
+    let md = "---\nno_toc: true\n---\n# Hello\n";
+    let mut config = default_config(&dir);
+    config.toc = true;
+    config.toc_explicit = true; // CLI said YES → wins over frontmatter
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("#outline("),
+        "CLI explicit --toc should override frontmatter no_toc: true, got:\n{src}");
+}
+
+// ── Duplicate heading label disambiguation ────────────────────────────────────
+
+#[test]
+fn duplicate_headings_get_unique_labels() {
+    let dir = TempDir::new().unwrap();
+    let md = "# Overview\n\nFirst section.\n\n# Overview\n\nSecond section.\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    // First occurrence: <overview>
+    assert!(src.contains("<overview>"), "first label should be <overview>, got:\n{src}");
+    // Second occurrence: <overview-2>
+    assert!(src.contains("<overview-2>"), "second label should be <overview-2>, got:\n{src}");
+    // Should NOT have two <overview> labels (that would be invalid Typst)
+    let count = src.matches("<overview>").count();
+    assert_eq!(count, 1, "base label <overview> should appear exactly once, got:\n{src}");
+}
+
+#[test]
+fn triple_duplicate_headings_all_unique() {
+    let dir = TempDir::new().unwrap();
+    let md = "# Intro\n\n# Intro\n\n# Intro\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("<intro>"), "first: <intro>, got:\n{src}");
+    assert!(src.contains("<intro-2>"), "second: <intro-2>, got:\n{src}");
+    assert!(src.contains("<intro-3>"), "third: <intro-3>, got:\n{src}");
+}
+
+#[test]
+fn non_duplicate_headings_keep_base_label() {
+    let dir = TempDir::new().unwrap();
+    let md = "# Introduction\n## Getting Started\n### Installation\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("<introduction>"), "got:\n{src}");
+    assert!(src.contains("<getting-started>"), "got:\n{src}");
+    assert!(src.contains("<installation>"), "got:\n{src}");
+    // None should have a numeric suffix
+    assert!(!src.contains("<introduction-2>"), "got:\n{src}");
+    assert!(!src.contains("<getting-started-2>"), "got:\n{src}");
+}
+
+#[test]
+fn mixed_levels_duplicate_labels_disambiguated() {
+    // Even if H1 and H2 produce the same slug, they should be unique.
+    let dir = TempDir::new().unwrap();
+    let md = "# Summary\n## Summary\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("<summary>"), "first: <summary>, got:\n{src}");
+    assert!(src.contains("<summary-2>"), "second: <summary-2>, got:\n{src}");
+    let count = src.matches("<summary>").count();
+    assert_eq!(count, 1, "base <summary> should appear exactly once, got:\n{src}");
+}
+
+// ── Internal clickable navigation (labels on headings) ────────────────────────
+
+#[test]
+fn every_heading_has_a_label() {
+    let dir = TempDir::new().unwrap();
+    let md = "# First\n## Second\n### Third\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    // Each heading line should be followed by a <label>
+    assert!(src.contains("= First <first>"), "H1 label missing, got:\n{src}");
+    assert!(src.contains("== Second <second>"), "H2 label missing, got:\n{src}");
+    assert!(src.contains("=== Third <third>"), "H3 label missing, got:\n{src}");
+}
+
+#[test]
+fn toc_with_headings_uses_outline_for_clickable_nav() {
+    // When TOC is enabled, #outline() is emitted which Typst uses to build
+    // clickable cross-references via the labels we attach to headings.
+    let dir = TempDir::new().unwrap();
+    let md = "# Chapter One\n## Section A\n## Section B\n";
+    let mut config = default_config(&dir);
+    config.toc = true;
+    config.toc_explicit = true;
+    config.toc_depth = 2;
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("#outline("), "outline should be emitted, got:\n{src}");
+    // Labels must be present for clickable links to work
+    assert!(src.contains("<chapter-one>"), "heading label missing, got:\n{src}");
+    assert!(src.contains("<section-a>"), "heading label missing, got:\n{src}");
+    assert!(src.contains("<section-b>"), "heading label missing, got:\n{src}");
+}
+
+// ── TOC depth controls which headings appear ──────────────────────────────────
+
+#[test]
+fn toc_depth_1_outline_excludes_deep_headings() {
+    // The outline depth parameter controls which headings appear in the TOC.
+    let dir = TempDir::new().unwrap();
+    let mut config = default_config(&dir);
+    config.toc = true;
+    config.toc_explicit = true;
+    config.toc_depth = 1;
+    let src = md_to_typst("# Top\n## Sub\n### Deep\n", &config).unwrap();
+    assert!(src.contains("depth: 1"), "expected depth: 1, got:\n{src}");
+}
+
+#[test]
+fn toc_depth_max_6_clamped() {
+    // toc_depth must be clamped to [1,6].
+    let dir = TempDir::new().unwrap();
+    let mut config = default_config(&dir);
+    config.toc = true;
+    config.toc_explicit = true;
+    config.toc_depth = 6;
+    let src = md_to_typst("# H1\n###### H6\n", &config).unwrap();
+    assert!(src.contains("depth: 6"), "got:\n{src}");
+}
+
+#[test]
+fn frontmatter_toc_depth_respected_in_outline() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\ntoc_depth: 4\n---\n# H1\n## H2\n### H3\n#### H4\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("depth: 4"), "expected depth: 4, got:\n{src}");
+}
+
+// ── TOC enable/disable round-trips ───────────────────────────────────────────
+
+#[test]
+fn toc_enabled_via_frontmatter_emits_outline_and_pagebreak() {
+    let dir = TempDir::new().unwrap();
+    let md = "---\ntoc: true\ntoc_depth: 2\n---\n# Hello\n## World\n";
+    let config = default_config(&dir);
+    let src = md_to_typst(md, &config).unwrap();
+    assert!(src.contains("#outline("), "should emit outline, got:\n{src}");
+    assert!(src.contains("#pagebreak()"), "should emit pagebreak after outline, got:\n{src}");
+    assert!(src.contains("depth: 2"), "should use depth 2, got:\n{src}");
+}
+
+#[test]
+fn toc_disabled_no_outline_no_pagebreak() {
+    let dir = TempDir::new().unwrap();
+    let mut config = default_config(&dir);
+    config.toc = false;
+    config.toc_explicit = true;
+    let src = md_to_typst("# Hello\n## World\n", &config).unwrap();
+    assert!(!src.contains("#outline("), "should not emit outline, got:\n{src}");
+    assert!(!src.contains("#pagebreak()"), "should not emit pagebreak, got:\n{src}");
 }

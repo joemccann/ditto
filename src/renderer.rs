@@ -152,10 +152,16 @@ pub fn typst_quoted_string_pub(s: &str) -> String {
     typst_quoted_string(s)
 }
 
-/// Test shim: expose `generate_typst_toc` to integration tests.
+/// Test shim: expose `generate_typst_toc` to integration tests (default title).
 #[doc(hidden)]
 pub fn generate_typst_toc_pub(depth: u8) -> String {
-    generate_typst_toc(depth)
+    generate_typst_toc(depth, "Table of Contents")
+}
+
+/// Test shim: expose `generate_typst_toc` with a custom title to integration tests.
+#[doc(hidden)]
+pub fn generate_typst_toc_titled_pub(depth: u8, title: &str) -> String {
+    generate_typst_toc(depth, title)
 }
 
 /// Test shim: expose `extract_toc` to integration tests.
@@ -181,15 +187,18 @@ fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
     let toc_enabled = if config.toc_explicit {
         config.toc
     } else {
-        fm.toc.unwrap_or(config.toc)
+        // `no_toc: true` in frontmatter is a convenient alias for `toc: false`
+        let fm_no_toc = fm.no_toc.unwrap_or(false);
+        if fm_no_toc { false } else { fm.toc.unwrap_or(config.toc) }
     };
     let toc_depth = fm.toc_depth.unwrap_or(config.toc_depth).clamp(1, 6);
+    let toc_title = fm.toc_title.as_deref().unwrap_or("Table of Contents");
 
     let mut renderer = TypstRenderer::new(config);
     // render_node(root) goes through the Document arm which appends footnotes.
     let body = renderer.render_node(root)?;
     let toc = if toc_enabled {
-        generate_typst_toc(toc_depth)
+        generate_typst_toc(toc_depth, toc_title)
     } else {
         String::new()
     };
@@ -219,11 +228,15 @@ fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
 
 struct Frontmatter {
     toc: Option<bool>,
+    /// Alias: `no_toc: true` is equivalent to `toc: false`.
+    no_toc: Option<bool>,
     toc_depth: Option<u8>,
+    /// Custom title for the TOC page (default: "Table of Contents").
+    toc_title: Option<String>,
 }
 
 fn parse_frontmatter(markdown: &str) -> Frontmatter {
-    let mut fm = Frontmatter { toc: None, toc_depth: None };
+    let mut fm = Frontmatter { toc: None, no_toc: None, toc_depth: None, toc_title: None };
     let text = markdown.trim_start();
     if !text.starts_with("---") {
         return fm;
@@ -242,6 +255,14 @@ fn parse_frontmatter(markdown: &str) -> Frontmatter {
             if let Ok(n) = val.parse::<u8>() {
                 fm.toc_depth = Some(n);
             }
+        } else if let Some(rest) = line.strip_prefix("toc_title:") {
+            let val = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !val.is_empty() {
+                fm.toc_title = Some(val);
+            }
+        } else if let Some(rest) = line.strip_prefix("no_toc:") {
+            let val = rest.trim().to_ascii_lowercase();
+            fm.no_toc = Some(val == "true" || val == "yes" || val == "1");
         } else if let Some(rest) = line.strip_prefix("toc:") {
             let val = rest.trim().to_ascii_lowercase();
             fm.toc = Some(val == "true" || val == "yes" || val == "1");
@@ -295,8 +316,15 @@ struct TypstRenderer {
     html_inline_stack: Vec<InlineHtmlFrame>,
     /// When true, skip downloading remote images.
     no_remote_images: bool,
-    /// Accumulated footnote definitions: (name, ix, rendered_body).
-    footnotes: Vec<(String, u32, String)>,
+    /// Accumulated footnote definitions keyed by name: (name, body).
+    /// We collect these when visiting FootnoteDefinition nodes.
+    footnote_defs: HashMap<String, String>,
+    /// Ordered list of footnote (name, document-ix) from FootnoteReference nodes.
+    /// `ix` is comrak's per-footnote ordinal — first unique footnote = 1, etc.
+    footnote_refs: Vec<(String, u32)>,
+    /// Track heading labels already emitted so duplicates can be disambiguated.
+    /// Maps base label → count of occurrences seen so far.
+    heading_labels_seen: HashMap<String, usize>,
 }
 
 impl TypstRenderer {
@@ -323,7 +351,9 @@ impl TypstRenderer {
             mono_font: config.fonts.monospace.clone(),
             html_inline_stack: Vec::new(),
             no_remote_images: config.no_remote_images,
-            footnotes: Vec::new(),
+            footnote_defs: HashMap::new(),
+            footnote_refs: Vec::new(),
+            heading_labels_seen: HashMap::new(),
         }
     }
 
@@ -340,7 +370,7 @@ impl TypstRenderer {
             NodeValue::Document => {
                 let body = self.render_children(node)?;
                 // Append footnote section after document body if any were collected.
-                if self.footnotes.is_empty() {
+                if self.footnote_defs.is_empty() {
                     Ok(body)
                 } else {
                     Ok(format!("{}\n{}", body, self.emit_footnote_section()))
@@ -353,7 +383,19 @@ impl TypstRenderer {
             }
             NodeValue::Heading(NodeHeading { level, .. }) => {
                 let body = self.render_inline_children(node)?;
-                let label = heading_label(body.trim());
+                let base_label = heading_label(body.trim());
+                // Deduplicate labels: if the same base label has been used before,
+                // append `-2`, `-3`, … so every heading gets a unique anchor.
+                // This ensures `#outline()` click-targets resolve correctly even
+                // when a document has repeated heading text (e.g. multiple "Overview"
+                // sections).
+                let count = self.heading_labels_seen.entry(base_label.clone()).or_insert(0);
+                *count += 1;
+                let label = if *count == 1 {
+                    base_label
+                } else {
+                    format!("{}-{}", base_label, count)
+                };
                 // Emit the heading followed by a Typst label so #outline()
                 // can build clickable, page-numbered TOC entries automatically.
                 Ok(format!(
@@ -404,11 +446,25 @@ impl TypstRenderer {
                 self.list_depth += 1;
                 let body = self.render_children(node)?;
                 self.list_depth -= 1;
+                let is_ordered = list.list_type == ListType::Ordered;
+                let start_at = list.start;
                 self.list_stack.pop();
                 self.ordered_start_stack.pop();
                 self.ordered_counter_stack.pop();
+
+                // For ordered lists that start at a value other than 1, emit
+                // a scoped block with `set enum(start: N)` so Typst renders
+                // the correct starting number without polluting outer scope.
                 // Add extra blank line after a top-level list for readability.
-                Ok(format!("{}\n", body))
+                if is_ordered && start_at != 1 {
+                    Ok(format!(
+                        "#block[\n#set enum(start: {})\n{}]\n\n",
+                        start_at,
+                        body
+                    ))
+                } else {
+                    Ok(format!("{}\n", body))
+                }
             }
             NodeValue::Item(item) => self.render_list_item(node, item.list_type),
             NodeValue::TaskItem(checked) => {
@@ -441,16 +497,22 @@ impl TypstRenderer {
 
             // ── Footnotes ─────────────────────────────────────────────────────
             NodeValue::FootnoteDefinition(def) => {
-                // Accumulate footnote body; we'll emit a section at document end.
+                // Accumulate footnote body keyed by name; emitted at document end.
                 let name = def.name.clone();
-                let ix = def.total_references; // use as ordinal
                 let body = self.render_children(node)?;
-                self.footnotes.push((name, ix, body.trim().to_string()));
+                self.footnote_defs.insert(name, body.trim().to_string());
                 Ok(String::new())
             }
             NodeValue::FootnoteReference(r) => {
-                // Emit a superscript numeral that anchors to the footnote section.
+                // `ix` is comrak's 1-based unique footnote ordinal (order of first
+                // appearance in the document).  Record the (name, ix) pair so we
+                // can sort the definition section by first-use order.
                 let ix = r.ix;
+                let name = r.name.clone();
+                // Only record the first reference to each footnote for ordering.
+                if !self.footnote_refs.iter().any(|(n, _)| n == &name) {
+                    self.footnote_refs.push((name, ix));
+                }
                 Ok(format!("#super[{}]", ix))
             }
 
@@ -553,20 +615,52 @@ impl TypstRenderer {
             String::new()
         };
 
-        let mut parts = Vec::new();
-        for child in node.children() {
-            parts.push(self.render_node(child)?);
+        // Collect children, distinguishing between the inline text (first paragraph)
+        // and block children (nested lists, additional paragraphs).
+        let children: Vec<_> = node.children().collect();
+        if children.is_empty() {
+            return Ok(format!("{}{}\n", indent, marker));
         }
 
-        // Join children; trim trailing whitespace; nested lists are rendered inline.
-        let content = parts.join("").trim_end().to_string();
-        Ok(format!("{}{}{}\n", indent, marker, content.trim_start()))
+        // Render the first child — if it's a Paragraph, flatten it inline.
+        // Subsequent children (nested lists, block quotes, etc.) are rendered
+        // on their own lines with proper indentation.
+        let mut first_text = String::new();
+        let mut rest_parts: Vec<String> = Vec::new();
+        let mut first_done = false;
+
+        for child in &children {
+            if !first_done {
+                let val = &child.data.borrow().value.clone();
+                match val {
+                    NodeValue::Paragraph => {
+                        first_text = self.render_inline_children(child)?;
+                        first_done = true;
+                    }
+                    _ => {
+                        first_text = self.render_node(child)?;
+                        first_text = first_text.trim_end().to_string();
+                        first_done = true;
+                    }
+                }
+            } else {
+                let rendered = self.render_node(child)?;
+                rest_parts.push(rendered);
+            }
+        }
+
+        // Build output: marker + first text on first line, then any nested content.
+        let first_trimmed = first_text.trim_end().to_string();
+        if rest_parts.is_empty() {
+            Ok(format!("{}{}{}\n", indent, marker, first_trimmed.trim_start()))
+        } else {
+            // Nested content: trim extra newlines so it reads cleanly.
+            let nested = rest_parts.join("").trim_end().to_string();
+            Ok(format!("{}{}{}\n{}\n", indent, marker, first_trimmed.trim_start(), nested))
+        }
     }
 
     fn render_task_item<'a>(&mut self, node: &'a AstNode<'a>, checked: bool) -> Result<String> {
-        // Task items always use bullet-style marker with a checkbox glyph.
-        let _checkbox = if checked { "[x]" } else { "[ ]" }; // kept for reference
-
         // Indentation based on nesting depth.
         let indent = if self.list_depth > 1 {
             "  ".repeat(self.list_depth - 1)
@@ -574,19 +668,49 @@ impl TypstRenderer {
             String::new()
         };
 
-        let mut parts = Vec::new();
-        for child in node.children() {
-            parts.push(self.render_node(child)?);
-        }
-        let content = parts.join("").trim().to_string();
-        // Emit as: `- #box[☑] content` using a styled checkbox
+        // Render checkbox as an inline box so it aligns with the text.
+        // ☑ (U+2611) = checked ballot box, ☐ (U+2610) = unchecked ballot box.
         let box_char = if checked { "☑" } else { "☐" };
-        Ok(format!(
-            "{}- {}  {}\n",
-            indent,
-            escape_typst_text(box_char),
-            content.trim_start()
-        ))
+        let checkbox = format!("#box(width: 1em)[{}]", escape_typst_text(box_char));
+
+        // Same two-phase rendering as render_list_item: first child is the
+        // inline text (Paragraph), remaining children are nested lists / blocks.
+        let children: Vec<_> = node.children().collect();
+        if children.is_empty() {
+            return Ok(format!("{}- {} \n", indent, checkbox));
+        }
+
+        let mut first_text = String::new();
+        let mut rest_parts: Vec<String> = Vec::new();
+        let mut first_done = false;
+
+        for child in &children {
+            if !first_done {
+                let val = child.data.borrow().value.clone();
+                match val {
+                    NodeValue::Paragraph => {
+                        first_text = self.render_inline_children(child)?;
+                        first_done = true;
+                    }
+                    _ => {
+                        first_text = self.render_node(child)?;
+                        first_text = first_text.trim_end().to_string();
+                        first_done = true;
+                    }
+                }
+            } else {
+                let rendered = self.render_node(child)?;
+                rest_parts.push(rendered);
+            }
+        }
+
+        let first_trimmed = first_text.trim_end().to_string();
+        if rest_parts.is_empty() {
+            Ok(format!("{}- {} {}\n", indent, checkbox, first_trimmed.trim_start()))
+        } else {
+            let nested = rest_parts.join("").trim_end().to_string();
+            Ok(format!("{}- {} {}\n{}\n", indent, checkbox, first_trimmed.trim_start(), nested))
+        }
     }
 
     fn render_code_block(&self, block: &NodeCodeBlock) -> String {
@@ -604,7 +728,9 @@ impl TypstRenderer {
     }
 
     fn render_image<'a>(&mut self, node: &'a AstNode<'a>, url: &str) -> Result<String> {
-        let alt = self.render_inline_children(node)?.trim().to_string();
+        // Extract plain text for the alt/caption — not Typst markup, because
+        // format_image_typst will call escape_typst_text on it.
+        let alt = self.extract_alt_text(node);
         match self.resolve_image(url) {
             Ok(info) => Ok(format_image_typst(&info, &alt)),
             Err(e) => {
@@ -612,6 +738,25 @@ impl TypstRenderer {
                 Ok(missing_image_fallback(url, &alt))
             }
         }
+    }
+
+    /// Recursively collect plain text from AST children without any Typst
+    /// markup.  Used for image alt text / captions so that format_image_typst
+    /// can safely call escape_typst_text on the result without double-escaping.
+    fn extract_alt_text<'a>(&self, node: &'a AstNode<'a>) -> String {
+        let mut out = String::new();
+        for child in node.children() {
+            let v = child.data.borrow();
+            match &v.value {
+                NodeValue::Text(t) => out.push_str(t),
+                NodeValue::Code(c) => out.push_str(&c.literal),
+                NodeValue::SoftBreak | NodeValue::LineBreak => out.push(' '),
+                NodeValue::Math(m) => out.push_str(&m.literal),
+                // For styled nodes (bold, italic, etc.) recurse into children
+                _ => out.push_str(&self.extract_alt_text(child)),
+            }
+        }
+        out
     }
 
     /// Resolve an image URL/path to an [`ImageInfo`], downloading and caching
@@ -830,19 +975,26 @@ impl TypstRenderer {
             TableAlignment::None   => "left", // default
         }).collect();
 
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        for row in node.children() {
+        // Collect rows; track which is the header.
+        let mut rows: Vec<(bool, Vec<String>)> = Vec::new();
+        for (row_idx, row) in node.children().enumerate() {
+            let is_header = row_idx == 0;
             let mut cells = Vec::new();
             let mut col_idx = 0usize;
             for cell in row.children() {
                 let text = self.render_inline_children(cell)?;
                 let align = alignments.get(col_idx).copied().unwrap_or("left");
-                // Wrap each cell with explicit per-cell alignment override.
-                cells.push(format!("table.cell(align: {})[{}]", align, text.trim()));
+                // Header cells: bold content; data cells: plain.
+                let cell_content = if is_header {
+                    format!("table.cell(align: {})[#strong[{}]]", align, text.trim())
+                } else {
+                    format!("table.cell(align: {})[{}]", align, text.trim())
+                };
+                cells.push(cell_content);
                 col_idx += 1;
             }
             if !cells.is_empty() {
-                rows.push(cells);
+                rows.push((is_header, cells));
             }
         }
 
@@ -850,25 +1002,15 @@ impl TypstRenderer {
             return Ok(String::new());
         }
 
-        let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let column_count = rows.iter().map(|(_, r)| r.len()).max().unwrap_or(0);
 
         // Build a column-width spec: all equal fractional columns.
-        let col_spec = format!("({})", (0..column_count).map(|_| "1fr").collect::<Vec<_>>().join(", "));
+        let col_spec = format!(
+            "({})",
+            (0..column_count).map(|_| "1fr").collect::<Vec<_>>().join(", ")
+        );
 
-        // Style the header row differently: bold text + tinted background.
-        let mut flat: Vec<String> = Vec::new();
-        for (row_idx, row) in rows.into_iter().enumerate() {
-            for cell in row {
-                if row_idx == 0 {
-                    // Header row — wrap in bold fill.
-                    // Replace the closing `)[...]` with bold content
-                    let bolded = cell.replacen(")[", ")[#strong[", 1) + "]";
-                    flat.push(bolded);
-                } else {
-                    flat.push(cell);
-                }
-            }
-        }
+        let flat: Vec<String> = rows.into_iter().flat_map(|(_, cells)| cells).collect();
 
         Ok(format!(
             "#table(\n  columns: {},\n  stroke: luma(200),\n  inset: 6pt,\n  fill: (col, row) => if row == 0 {{ luma(230) }} else {{ white }},\n  {}\n)\n\n",
@@ -878,22 +1020,39 @@ impl TypstRenderer {
     }
 
     /// Emit the footnote section collected during document rendering.
+    ///
+    /// Footnotes are sorted by first-reference order (the `ix` from comrak's
+    /// `FootnoteReference` nodes), so the printed numbers match the superscripts.
     fn emit_footnote_section(&self) -> String {
-        if self.footnotes.is_empty() {
+        if self.footnote_defs.is_empty() {
             return String::new();
         }
         let mut out = String::from("#line(length: 100%)\n\n");
-        // Sort by ix (document order).
-        let mut sorted = self.footnotes.clone();
-        sorted.sort_by_key(|(_, ix, _)| *ix);
-        for (ix, (_name, _ref_cnt, body)) in sorted.iter().enumerate() {
-            let num = ix + 1;
-            out.push_str(&format!(
-                "#super[{}] {}\n\n",
-                num,
-                body
-            ));
+
+        // Sort by the `ix` captured from FootnoteReference nodes (document order).
+        let mut ordered: Vec<(&str, u32)> = self
+            .footnote_refs
+            .iter()
+            .map(|(name, ix)| (name.as_str(), *ix))
+            .collect();
+        ordered.sort_by_key(|(_, ix)| *ix);
+
+        for (name, ix) in &ordered {
+            if let Some(body) = self.footnote_defs.get(*name) {
+                out.push_str(&format!("#super[{}] {}\n\n", ix, body));
+            }
         }
+
+        // Emit any definitions not referenced in-text (ordered by their name
+        // as a fallback — shouldn't normally happen in valid GFM).
+        let mut extra_num = ordered.len() as u32 + 1;
+        for (name, body) in &self.footnote_defs {
+            if !ordered.iter().any(|(n, _)| n == name) {
+                out.push_str(&format!("#super[{}] {}\n\n", extra_num, body));
+                extra_num += 1;
+            }
+        }
+
         out
     }
 }
@@ -922,13 +1081,32 @@ fn extract_toc(markdown: &str) -> Vec<TocEntry> {
 /// Typst's built-in `outline()` automatically:
 /// - Computes real page numbers for every heading
 /// - Renders dotted leader lines between title and page number
-/// - Makes each entry a clickable internal link
+/// - Makes each entry a clickable internal link (via the `<label>` anchors
+///   we attach to every heading)
 ///
-/// We control depth with the `depth:` parameter.
-fn generate_typst_toc(toc_depth: u8) -> String {
+/// We control depth with the `depth:` parameter and support a custom title.
+///
+/// After the outline block we emit `#pagebreak()` so that body content
+/// always begins on a fresh page, separate from the TOC.
+fn generate_typst_toc(toc_depth: u8, title: &str) -> String {
+    let escaped_title = escape_typst_text(title);
     format!(
-        "#outline(\n  title: [Table of Contents],\n  depth: {},\n  indent: 1em,\n)\n\n",
-        toc_depth
+        // Show rule: H1 entries are rendered in bold weight.
+        // Typst's built-in #outline() automatically:
+        //   - computes real page numbers for every heading
+        //   - renders dot leaders between heading text and page number
+        //   - makes each entry a clickable internal link (via <label> anchors)
+        // We use `indent: 1.5em` to visually nest sub-headings and apply a
+        // `#show` rule to make H1 entries bold.
+        "#show outline.entry.where(level: 1): it => {{\n\
+  strong(it)\n\
+}}\n\
+#outline(\n\
+  title: [{escaped_title}],\n\
+  depth: {toc_depth},\n\
+  indent: 1.5em,\n\
+)\n\
+#pagebreak()\n\n"
     )
 }
 
@@ -1362,6 +1540,7 @@ fn escape_typst_text(s: &str) -> String {
         .replace('\\', "\\\\")
         .replace('#', "\\#")
         .replace('@', "\\@") // Prevent @label citation syntax
+        .replace('$', "\\$") // Prevent accidental math mode
         .replace('[', "\\[")
         .replace(']', "\\]")
         .replace('{', "\\{")
@@ -1520,11 +1699,23 @@ pub fn is_svg_bytes(bytes: &[u8]) -> bool {
     let snippet = &bytes[start..bytes.len().min(start + 512)];
     if let Ok(s) = std::str::from_utf8(snippet) {
         let trimmed = s.trim_start();
-        trimmed.starts_with("<?xml")
-            || trimmed.starts_with("<svg")
+        // A file is SVG when it either begins directly with an `<svg` element
+        // or has an XML declaration followed somewhere by an `<svg` open tag.
+        // We must NOT treat arbitrary XML files (e.g. XHTML, Atom feeds) as SVG.
+        if trimmed.starts_with("<svg")
             || trimmed.contains("<svg ")
             || trimmed.contains("<svg\t")
             || trimmed.contains("<svg\n")
+            || trimmed.contains("<svg>")
+        {
+            return true;
+        }
+        // XML declaration: only accept if followed by an <svg element.
+        if trimmed.starts_with("<?xml") {
+            let lower = trimmed.to_ascii_lowercase();
+            return lower.contains("<svg");
+        }
+        false
     } else {
         false
     }
@@ -2263,7 +2454,9 @@ mod image_tests {
             mono_font: "DejaVu Sans Mono".to_string(),
             html_inline_stack: Vec::new(),
             no_remote_images: false,
-            footnotes: Vec::new(),
+            footnote_defs: HashMap::new(),
+            footnote_refs: Vec::new(),
+            heading_labels_seen: HashMap::new(),
         }
     }
 

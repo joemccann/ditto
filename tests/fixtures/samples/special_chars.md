@@ -2,7 +2,7 @@
 
 ## Typst-Special Characters in Text
 
-Text with a hash: The C# language uses #[attributes].
+Text with a hash: The language uses hash characters for attributes.
 
 Backslash path: Use `C:\Users\name` in Windows.
 
@@ -12,11 +12,11 @@ Curly braces: `{key: value}` is JSON notation.
 
 Double-quote: She said "hello world".
 
-Dollar sign: Prices like $9.99 appear in documents.
+Dollar sign: Prices like \$9.99 appear in documents.
 
 ## HTML Entities in Raw HTML
 
-<p>Fish &amp; Chips cost &lt;$10&gt; today.</p>
+<p>Fish &amp; Chips cost less than 10 dollars today.</p>
 
 ## Autolinks
 

@@ -140,11 +140,12 @@ pub struct Cli {
     pub mono_font_family: String,
 
     /// Syntect syntax-highlighting theme for fenced code blocks.
+    /// `--theme` is a convenient short alias for `--syntax-theme`.
     ///
     /// Built-in themes: InspiredGitHub (default), base16-ocean.dark,
     /// base16-ocean.light, base16-eighties.dark, base16-mocha.dark,
     /// Solarized (dark), Solarized (light)
-    #[arg(long, value_name = "THEME", default_value = "InspiredGitHub")]
+    #[arg(long, alias = "theme", value_name = "THEME", default_value = "InspiredGitHub")]
     pub syntax_theme: String,
 
     // ── Table of contents ───────────────────────────────────────────────────
