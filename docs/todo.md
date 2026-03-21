@@ -31,37 +31,71 @@ Current state:
 - No token-level syntax coloring yet.
 
 TODO:
-- [ ] Add true language-aware syntax highlighting
-- [ ] Use `syntect` or equivalent to tokenize code blocks
-- [ ] Map token styles into Typst-renderable styled spans
-- [ ] Add fallback behavior for unknown languages
+- [x] Add true language-aware syntax highlighting
+- [x] Use `syntect` to tokenize code blocks (SyntaxSet + ThemeSet via OnceLock)
+- [x] Map token styles into Typst `#text(fill: rgb(...), weight, style)[...]` spans
+- [x] Add fallback behavior for unknown languages (uses `#raw(...)` for safe rendering)
 - [ ] Support inline code styling consistency with fenced blocks
 
 ### 2. Math / LaTeX support
 
 Current state:
-- Basic passthrough-ish handling only
-- Complex LaTeX is not robustly supported
+- `$...$` inline and `$$...$$` display math parsing enabled via comrak `math_dollars`
+- ` ```math ``` ` fenced code blocks and `$`...`$` backtick syntax supported
+- Full `latex_to_typst` translator converts common LaTeX to Typst native math:
+  - Fractions: `\frac`, `\dfrac`, `\cfrac`
+  - Roots: `\sqrt`, `\sqrt[n]{...}`
+  - Greek letters (lower and uppercase): `\alpha`…`\Omega`
+  - Operators: `\pm`, `\leq`, `\geq`, `\neq`, `\approx`, `\cdot`, `\times`, `\div`…
+  - Trig / log: `\sin`, `\cos`, `\tan`, `\ln`, `\log`, `\lim`, `\sum`, `\int`…
+  - Arrows: `\to`, `\rightarrow`, `\Rightarrow`, `\mapsto`…
+  - Accents: `\hat`, `\tilde`, `\bar`, `\vec`, `\dot`, `\ddot`…
+  - Text in math: `\text{…}`, `\mathrm{…}`, `\mathbf{…}`, `\mathbb{…}`
+  - Matrices: `pmatrix`, `bmatrix`, `Bmatrix`, `vmatrix`, `Vmatrix`, `matrix`
+  - Piecewise functions: `cases` environment
+  - Aligned equations: `align`, `align*`, `aligned`
+  - Delimiters: `\left`, `\right`, `\langle`, `\rangle`, `\lfloor`, `\rfloor`…
+  - Misc: `\partial`, `\nabla`, `\infty`, `\hbar`, `\forall`, `\exists`…
+
+Known limitations:
+- Multi-letter implicit multiplication (`ac`, `dx`) must use spaces in LaTeX source
+  (Typst treats multi-letter identifiers as named variables, not implied products)
+- Obscure LaTeX packages / environments not yet mapped
 
 TODO:
-- [ ] Convert inline math `$...$` into Typst-native math where possible
-- [ ] Convert display math `$$...$$` into Typst display math blocks
-- [ ] Handle escaping and nested delimiters correctly
-- [ ] Document unsupported LaTeX constructs
-- [ ] Add tests for common math expressions
+- [x] Convert inline math `$...$` into Typst-native math where possible
+- [x] Convert display math `$$...$$` into Typst display math blocks
+- [x] Handle escaping and nested delimiters correctly
+- [x] Document unsupported LaTeX constructs
+- [ ] Add comprehensive automated tests for math expressions
+- [ ] Consider auto-spacing single-letter sequences (e.g. `dx` → `d x`)
 
 ### 3. Raw HTML in Markdown
 
 Current state:
-- Raw HTML blocks are not faithfully rendered like a browser
-- HTML support is incomplete
+- ✅ Inline HTML tags are parsed and mapped to Typst equivalents via stateful stack
+- ✅ Block HTML tags are parsed and mapped to Typst block constructs
+- ✅ HTML entities are decoded before rendering
+- ✅ CSS `color` and `font-size` on `<span>` are converted to Typst text attributes
+- ✅ Unsupported/unknown tags are silently stripped (content preserved)
+- ✅ `src/html.rs` module with 44 unit tests covering all supported tags
 
-TODO:
-- [ ] Decide on HTML strategy: ignore, sanitize, partial map, or render subset
-- [ ] Support common inline HTML tags (`span`, `br`, `sub`, `sup`, etc.)
-- [ ] Support common block HTML tags (`div`, `img`, `table`, `details`, etc.)
-- [ ] Sanitize unsafe/unsupported HTML
-- [ ] Add tests for mixed Markdown + HTML documents
+Supported inline tags: `<br>`, `<wbr>`, `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`,
+`<s>`, `<del>`, `<ins>`, `<mark>`, `<small>`, `<sub>`, `<sup>`, `<code>`,
+`<kbd>`, `<samp>`, `<var>`, `<span style="color:…;font-size:…">`, `<a href="…">`,
+`<abbr>`, `<cite>`, `<dfn>`, `<q>`, `<time>`, `<data>`
+
+Supported block tags: `<p>`, `<div>`, `<section>`, `<article>`, `<main>`,
+`<header>`, `<footer>`, `<nav>`, `<aside>`, `<blockquote>`, `<hr>`, `<pre>`,
+`<ul>`, `<ol>`, `<li>`, `<dl>`, `<dt>`, `<dd>`, `<img>`, `<figure>`,
+`<figcaption>`, `<table>`, `<thead>`, `<tbody>`, `<tfoot>`, `<tr>`, `<th>`,
+`<td>`, `<details>`, `<summary>`, `<h1>`–`<h6>`
+
+TODO (future improvements):
+- [ ] Inline style `background-color` → highlight
+- [ ] `<iframe>`, `<video>`, `<audio>` — fallback placeholder text
+- [ ] Full table alignment from `align=` or CSS `text-align`
+- [ ] `<ruby>` / `<rt>` phonetic annotation
 
 ### 4. GitHub Flavored Markdown fidelity
 
@@ -159,7 +193,7 @@ Recommended implementation order:
 
 1. [ ] Real syntax highlighting
 2. [ ] Better math support
-3. [ ] Raw HTML rendering strategy
+3. [x] Raw HTML rendering strategy — done (`src/html.rs`, 44 tests)
 4. [ ] Better GFM fidelity for edge cases
 5. [ ] TOC with page numbers and internal links
 6. [ ] CLI polish and test coverage

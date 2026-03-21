@@ -146,6 +146,10 @@ fn markdown_options() -> Options<'static> {
     options.extension.footnotes = true;
     options.extension.description_lists = true;
     options.extension.front_matter_delimiter = Some("---".to_string());
+    // Enable `$...$` inline and `$$...$$` display math parsing
+    options.extension.math_dollars = true;
+    // Enable ```math ... ``` fenced blocks and $`...`$ syntax
+    options.extension.math_code = true;
     options.parse.smart = true;
     options.render.unsafe_ = true;
     options
@@ -161,7 +165,9 @@ struct TypstRenderer {
     asset_root: PathBuf,
     cache_dir: PathBuf,
     list_stack: Vec<ListType>,
+    /// syntect theme name, e.g. "base16-ocean.dark" or "InspiredGitHub"
     syntax_theme: String,
+    /// Monospace font name forwarded to code blocks
     mono_font: String,
     /// Open inline-HTML tag stack so close-tags emit the right Typst suffix.
     html_inline_stack: Vec<InlineHtmlFrame>,
@@ -246,16 +252,24 @@ impl TypstRenderer {
             NodeValue::Table(..) => self.render_table(node),
             NodeValue::ThematicBreak => Ok("#line(length: 100%)\n\n".to_string()),
             NodeValue::Math(math) => {
+                // Convert LaTeX math to Typst native math syntax
+                let converted = latex_to_typst(math.literal.trim());
                 if math.display_math {
-                    Ok(format!("$ {} $\n\n", math.literal))
+                    // Block math: Typst `$ expr $` on its own paragraph = display equation
+                    Ok(format!("$ {} $\n\n", converted))
                 } else {
-                    Ok(format!("$ {} $", math.literal))
+                    // Inline math: `$expr$` — no surrounding spaces
+                    Ok(format!("${}$", converted))
                 }
             }
             NodeValue::HtmlInline(html) => Ok(self.handle_html_inline(html)),
             NodeValue::HtmlBlock(html) => {
                 let rendered = block_html_to_typst(&html.literal);
-                if rendered.is_empty() { Ok(String::new()) } else { Ok(rendered) }
+                if rendered.is_empty() {
+                    Ok(String::new())
+                } else {
+                    Ok(rendered)
+                }
             }
             _ => self.render_children(node),
         }
@@ -275,8 +289,8 @@ impl TypstRenderer {
     /// Handle a raw inline HTML tag fragment.
     ///
     /// Comrak emits each tag (`<b>`, `bold text`, `</b>`) as separate AST nodes.
-    /// We maintain `html_inline_stack` across calls so opening tags push a Typst
-    /// prefix and closing tags pop+emit the matching suffix.
+    /// We maintain `html_inline_stack` across calls inside a single paragraph so
+    /// opening tags push a Typst prefix and closing tags pop+emit the matching suffix.
     fn handle_html_inline(&mut self, html: &str) -> String {
         match parse_inline_tag(html) {
             // Void elements (self-closing by definition)
@@ -284,11 +298,8 @@ impl TypstRenderer {
                 if is_void_inline(name) =>
             {
                 match name.as_str() {
-                    "br" | "wbr" => "\\
-".to_string(),
-                    "hr" => "#line(length: 100%)
-
-".to_string(),
+                    "br" | "wbr" => "\\\n".to_string(),
+                    "hr" => "#line(length: 100%)\n\n".to_string(),
                     _ => String::new(),
                 }
             }
@@ -343,6 +354,15 @@ impl TypstRenderer {
 
     fn render_code_block(&self, block: &NodeCodeBlock) -> String {
         let lang = block.info.split_whitespace().next().unwrap_or_default();
+
+        // ```math ... ``` fenced blocks are display math, not code.
+        if lang == "math" {
+            let converted = latex_to_typst(block.literal.trim());
+            return format!("$ {} $\n\n", converted);
+        }
+
+        // Delegate to the syntect-based highlighter which returns a complete
+        // self-contained Typst `#block(…)` expression with per-token colours.
         highlight_code_to_typst(&block.literal, lang, &self.mono_font, &self.syntax_theme)
     }
 
@@ -458,6 +478,375 @@ fn generate_typst_toc(markdown: &str) -> String {
     lines.push_str("#pagebreak()\n");
     lines
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LaTeX → Typst math translation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a LaTeX math expression to Typst math syntax.
+///
+/// Typst math is similar to LaTeX but uses function-call notation for most
+/// constructs.  This covers the common subset that appears in Markdown.
+/// Unknown commands are passed through unchanged (with leading `\`) so they
+/// fail visibly rather than producing silent wrong output.
+fn latex_to_typst(latex: &str) -> String {
+    let chars: Vec<char> = latex.chars().collect();
+    let mut out = String::with_capacity(latex.len() + 16);
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                i += 1;
+                if i >= chars.len() { out.push('\\'); continue; }
+                match chars[i] {
+                    // Line break inside matrices / aligned envs
+                    '\\' => { out.push_str("\\ "); i += 1; continue; }
+                    // Spacing commands → single space
+                    ',' | ':' | ';' | '!' | ' ' => { out.push(' '); i += 1; continue; }
+                    // Escaped braces → literal brace
+                    '{' => { out.push('{'); i += 1; continue; }
+                    '}' => { out.push('}'); i += 1; continue; }
+                    _ => {}
+                }
+                // Collect alphabetic command name
+                let cmd_start = i;
+                while i < chars.len() && chars[i].is_ascii_alphabetic() { i += 1; }
+                let cmd: String = chars[cmd_start..i].iter().collect();
+                // Skip optional trailing space after command name
+                if i < chars.len() && chars[i] == ' ' && !cmd.is_empty() { i += 1; }
+
+                // Insert a leading space if the output buffer ends with an
+                // identifier char and the translated command will start with one
+                // — prevents merging like `i` + `pi` → `ipi`.
+                let prev_is_ident = out.chars().last()
+                    .map(|c| c.is_alphanumeric() || c == '\'')
+                    .unwrap_or(false);
+
+                let translated = math_cmd(&cmd, &chars, &mut i);
+
+                if prev_is_ident {
+                    if let Some(first) = translated.chars().next() {
+                        if first.is_alphanumeric() || first == '"' {
+                            out.push(' ');
+                        }
+                    }
+                }
+                out.push_str(&translated);
+
+                // Insert a trailing space when the translation ends with an
+                // identifier char and the next input char is also alphanumeric
+                // — prevents e.g. `gt.eq0` instead of `gt.eq 0`.
+                if let (Some(last), Some(&next)) = (translated.chars().last(), chars.get(i)) {
+                    if (last.is_alphanumeric() || last == '.')
+                        && (next.is_alphanumeric() || next == '_')
+                    {
+                        out.push(' ');
+                    }
+                }
+            }
+            // Braces pass through as Typst grouping.
+            // `math_cmd`'s `consume` helper already consumed the braces that
+            // belonged to function arguments.
+            '{' => { out.push('{'); i += 1; }
+            '}' => { out.push('}'); i += 1; }
+            c   => { out.push(c);  i += 1; }
+        }
+    }
+    out
+}
+
+/// Translate a single LaTeX command name to its Typst equivalent.
+/// `chars` and `i` allow consuming brace-delimited arguments.
+fn math_cmd(cmd: &str, chars: &[char], i: &mut usize) -> String {
+    // Consume one brace-group {…} or single token, returning it translated.
+    let consume = |chars: &[char], i: &mut usize| -> String {
+        while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
+        if *i >= chars.len() { return String::new(); }
+        if chars[*i] == '{' {
+            *i += 1;
+            let mut depth = 1usize;
+            let mut inner = String::new();
+            while *i < chars.len() {
+                match chars[*i] {
+                    '{' => { depth += 1; inner.push('{'); *i += 1; }
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 { *i += 1; break; }
+                        inner.push('}'); *i += 1;
+                    }
+                    c => { inner.push(c); *i += 1; }
+                }
+            }
+            latex_to_typst(&inner)
+        } else {
+            let c = chars[*i]; *i += 1;
+            if c == '\\' {
+                let start = *i;
+                while *i < chars.len() && chars[*i].is_ascii_alphabetic() { *i += 1; }
+                let sub: String = chars[start..*i].iter().collect();
+                math_cmd(&sub, chars, i)
+            } else { c.to_string() }
+        }
+    };
+
+    match cmd {
+        // ── fractions ─────────────────────────────────────────────────
+        "frac"|"dfrac"|"tfrac"|"cfrac" => {
+            let n = consume(chars, i); let d = consume(chars, i);
+            format!("frac({}, {})", n, d)
+        }
+        "binom" => {
+            let n = consume(chars, i); let k = consume(chars, i);
+            format!("binom({}, {})", n, k)
+        }
+
+        // ── roots ─────────────────────────────────────────────────────
+        "sqrt" => {
+            while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
+            if *i < chars.len() && chars[*i] == '[' {
+                *i += 1;
+                let mut n = String::new();
+                while *i < chars.len() && chars[*i] != ']' { n.push(chars[*i]); *i += 1; }
+                if *i < chars.len() { *i += 1; }
+                format!("root({}, {})", latex_to_typst(&n), consume(chars, i))
+            } else {
+                format!("sqrt({})", consume(chars, i))
+            }
+        }
+
+        // ── text in math ──────────────────────────────────────────────
+        "text"|"mathrm"|"mathit"|"mathsf"|"mathtt"|"operatorname" =>
+            format!("\"{}\"", consume(chars, i).replace('"', "\\\"")),
+        "mathbf"|"textbf"|"boldsymbol"|"bm" =>
+            format!("bold({})", consume(chars, i)),
+        "textrm"|"textnormal" =>
+            format!("\"{}\"", consume(chars, i).replace('"', "\\\"")),
+        // Blackboard bold: \mathbb{R} → RR, \mathbb{Z} → ZZ, etc.
+        "mathbb" => {
+            let inner = consume(chars, i);
+            match inner.trim() {
+                "R" => "RR".into(),
+                "Z" => "ZZ".into(),
+                "N" => "NN".into(),
+                "Q" => "QQ".into(),
+                "C" => "CC".into(),
+                "H" => "HH".into(),
+                other => format!("bb({})", other),
+            }
+        }
+
+        // ── accents ───────────────────────────────────────────────────
+        "hat"|"widehat"        => format!("hat({})",         consume(chars, i)),
+        "tilde"|"widetilde"    => format!("tilde({})",       consume(chars, i)),
+        "bar"|"overline"       => format!("overline({})",    consume(chars, i)),
+        "underline"            => format!("underline({})",   consume(chars, i)),
+        "vec"                  => format!("arrow({})",       consume(chars, i)),
+        "dot"                  => format!("dot({})",         consume(chars, i)),
+        "ddot"                 => format!("dot.double({})",  consume(chars, i)),
+        "underbrace"           => format!("underbrace({})",  consume(chars, i)),
+        "overbrace"            => format!("overbrace({})",   consume(chars, i)),
+
+        // ── trig / log functions ──────────────────────────────────────
+        "sin"=>"sin".into(), "cos"=>"cos".into(), "tan"=>"tan".into(),
+        "sec"=>"sec".into(), "csc"=>"csc".into(), "cot"=>"cot".into(),
+        "arcsin"=>"arcsin".into(), "arccos"=>"arccos".into(), "arctan"=>"arctan".into(),
+        "sinh"=>"sinh".into(), "cosh"=>"cosh".into(), "tanh"=>"tanh".into(),
+        "ln"=>"ln".into(), "log"=>"log".into(), "exp"=>"exp".into(),
+        "lim"=>"lim".into(), "limsup"=>"limsup".into(), "liminf"=>"liminf".into(),
+        "sup"=>"sup".into(), "inf"=>"inf".into(),
+        "max"=>"max".into(), "min"=>"min".into(),
+        "arg"=>"arg".into(), "det"=>"det".into(), "dim"=>"dim".into(),
+        "gcd"=>"gcd".into(), "hom"=>"hom".into(), "ker"=>"ker".into(),
+
+        // ── sums / integrals ──────────────────────────────────────────
+        "sum"=>"sum".into(), "prod"=>"prod".into(),
+        "int"=>"integral".into(), "iint"=>"integral.double".into(),
+        "iiint"=>"integral.triple".into(), "oint"=>"integral.cont".into(),
+        "bigcup"=>"union.big".into(), "bigcap"=>"sect.big".into(),
+
+        // ── Greek (lowercase) ─────────────────────────────────────────
+        "alpha"=>"alpha".into(), "beta"=>"beta".into(), "gamma"=>"gamma".into(),
+        "delta"=>"delta".into(), "epsilon"=>"epsilon".into(),
+        "varepsilon"=>"epsilon.alt".into(), "zeta"=>"zeta".into(),
+        "eta"=>"eta".into(), "theta"=>"theta".into(), "vartheta"=>"theta.alt".into(),
+        "iota"=>"iota".into(), "kappa"=>"kappa".into(), "lambda"=>"lambda".into(),
+        "mu"=>"mu".into(), "nu"=>"nu".into(), "xi"=>"xi".into(),
+        "pi"=>"pi".into(), "varpi"=>"pi.alt".into(),
+        "rho"=>"rho".into(), "varrho"=>"rho.alt".into(),
+        "sigma"=>"sigma".into(), "varsigma"=>"sigma.alt".into(),
+        "tau"=>"tau".into(), "upsilon"=>"upsilon".into(),
+        "phi"=>"phi.alt".into(), "varphi"=>"phi".into(),
+        "chi"=>"chi".into(), "psi"=>"psi".into(), "omega"=>"omega".into(),
+        // Greek (uppercase)
+        "Gamma"=>"Gamma".into(), "Delta"=>"Delta".into(), "Theta"=>"Theta".into(),
+        "Lambda"=>"Lambda".into(), "Xi"=>"Xi".into(), "Pi"=>"Pi".into(),
+        "Sigma"=>"Sigma".into(), "Upsilon"=>"Upsilon".into(),
+        "Phi"=>"Phi".into(), "Psi"=>"Psi".into(), "Omega"=>"Omega".into(),
+
+        // ── binary operators / relations ──────────────────────────────
+        "cdot"=>"dot.c".into(), "cdots"=>"dots.c".into(),
+        "ldots"|"dots"=>"dots".into(), "vdots"=>"dots.v".into(), "ddots"=>"dots.down".into(),
+        "times"=>"times".into(), "div"=>"div".into(),
+        "pm"=>"plus.minus".into(), "mp"=>"minus.plus".into(),
+        "leq"|"le"=>"lt.eq".into(), "geq"|"ge"=>"gt.eq".into(),
+        "neq"|"ne"=>"eq.not".into(), "approx"=>"approx".into(),
+        "sim"=>"tilde.op".into(), "simeq"=>"tilde.eq".into(),
+        "cong"=>"tilde.equiv".into(), "equiv"=>"equiv".into(),
+        "propto"=>"prop".into(), "ll"=>"lt.double".into(), "gg"=>"gt.double".into(),
+        "in"=>"in".into(), "notin"=>"in.not".into(),
+        "subset"=>"subset".into(), "subseteq"=>"subset.eq".into(),
+        "supset"=>"supset".into(), "supseteq"=>"supset.eq".into(),
+        "cup"=>"union".into(), "cap"=>"sect".into(),
+        "setminus"=>"without".into(), "emptyset"|"varnothing"=>"nothing".into(),
+        "forall"=>"forall".into(), "exists"=>"exists".into(), "nexists"=>"exists.not".into(),
+        "neg"|"lnot"=>"not".into(), "land"|"wedge"=>"and".into(), "lor"|"vee"=>"or".into(),
+        "oplus"=>"plus.circle".into(), "otimes"=>"times.circle".into(),
+        "circ"=>"circle.small".into(), "bullet"=>"bullet".into(),
+
+        // ── arrows ────────────────────────────────────────────────────
+        "to"|"rightarrow"=>"->".into(), "leftarrow"=>"<-".into(),
+        "Rightarrow"=>"=>".into(), "Leftarrow"=>"<=".into(),
+        "leftrightarrow"=>"<->".into(), "Leftrightarrow"=>"<=>".into(),
+        "mapsto"=>"|->".into(), "uparrow"=>"arrow.t".into(), "downarrow"=>"arrow.b".into(),
+        "updownarrow"=>"arrow.t.b".into(),
+        "longrightarrow"=>"-->".into(), "longleftarrow"=>"<--".into(),
+
+        // ── misc symbols ──────────────────────────────────────────────
+        "partial"=>"diff".into(), "nabla"=>"nabla".into(), "infty"=>"oo".into(),
+        "hbar"=>"planck.reduce".into(), "ell"=>"ell".into(),
+        "Re"=>"Re".into(), "Im"=>"Im".into(), "aleph"=>"aleph".into(),
+        "prime"=>"'".into(), "dagger"=>"dagger".into(), "ddagger"=>"dagger.double".into(),
+        "star"=>"star".into(), "ast"=>"ast".into(),
+
+        // ── delimiters (auto-sized in Typst) ──────────────────────────
+        "left"|"right" => {
+            while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
+            if *i < chars.len() {
+                let d = chars[*i]; *i += 1;
+                if d == '.' { String::new() } else { d.to_string() }
+            } else { String::new() }
+        }
+        "langle"=>"angle.l".into(), "rangle"=>"angle.r".into(),
+        "lfloor"=>"floor.l".into(), "rfloor"=>"floor.r".into(),
+        "lceil"=>"ceil.l".into(),   "rceil"=>"ceil.r".into(),
+        "lVert"|"rVert"=>"||".into(), "lvert"|"rvert"=>"|".into(),
+
+        // ── environments ──────────────────────────────────────────────
+        "begin" => { let env = consume(chars, i); math_env(&env, chars, i) }
+        "end"   => { consume(chars, i); String::new() }
+
+        // ── layout / spacing ──────────────────────────────────────────
+        "quad"=>"quad".into(), "qquad"=>"wide".into(),
+        "hspace"|"vspace" => { consume(chars, i); " ".into() }
+        "displaystyle"|"textstyle"|"scriptstyle"|"scriptscriptstyle" => String::new(),
+        "limits"|"nolimits"|"nonumber"|"notag" => String::new(),
+        "label"|"tag" => { consume(chars, i); String::new() }
+
+        // ── unknown: pass through so it fails visibly ──────────────────
+        other => format!("\\{}", other),
+    }
+}
+
+/// Handle `\begin{env}...\end{env}` environments.
+fn math_env(env: &str, chars: &[char], i: &mut usize) -> String {
+    let begin_m = format!("\\begin{{{}}}", env);
+    let end_m   = format!("\\end{{{}}}", env);
+    let remaining: String = chars[*i..].iter().collect();
+    let mut inner = String::new();
+    let mut depth = 1usize;
+    let mut j = 0usize;
+
+    while j < remaining.len() {
+        if remaining[j..].starts_with(begin_m.as_str()) {
+            depth += 1;
+            inner.push_str(&begin_m);
+            j += begin_m.len();
+        } else if remaining[j..].starts_with(end_m.as_str()) {
+            depth -= 1;
+            if depth == 0 { j += end_m.len(); break; }
+            inner.push_str(&end_m);
+            j += end_m.len();
+        } else {
+            let ch = remaining[j..].chars().next().unwrap_or('\0');
+            inner.push(ch);
+            j += ch.len_utf8();
+        }
+    }
+    *i += remaining[..j].chars().count();
+
+    match env {
+        "matrix"  => format!("mat(delim: #none, {})", math_matrix_body(&inner)),
+        "pmatrix" => format!("mat({})",                math_matrix_body(&inner)),
+        "bmatrix" => format!("mat(delim: \"[\", {})",  math_matrix_body(&inner)),
+        "Bmatrix" => format!("mat(delim: \"{{\", {})", math_matrix_body(&inner)),
+        "vmatrix" => format!("mat(delim: \"|\", {})",  math_matrix_body(&inner)),
+        "Vmatrix" => format!("mat(delim: \"||\", {})", math_matrix_body(&inner)),
+        "cases"   => math_cases(&inner),
+        "align"|"align*"|"aligned" => {
+            inner.split("\\\\")
+                 .map(|r| latex_to_typst(r.trim()))
+                 .collect::<Vec<_>>()
+                 .join(" \\ ")
+        }
+        "equation"|"equation*" => latex_to_typst(inner.trim()),
+        _ => latex_to_typst(inner.trim()),
+    }
+}
+
+/// Translate `cases` environment body.
+/// LaTeX: `expr & \text{if} cond \\` rows
+/// Typst: `cases(expr &"if" cond, ...)`
+fn math_cases(inner: &str) -> String {
+    let rows: Vec<String> = inner.split("\\\\")
+        .filter(|r| !r.trim().is_empty())
+        .map(|row| {
+            let parts: Vec<&str> = row.splitn(2, '&').collect();
+            if parts.len() == 2 {
+                let val = latex_to_typst(parts[0].trim());
+                let cond_raw = parts[1].trim();
+                let stripped = strip_text_if(cond_raw);
+                let cond = latex_to_typst(stripped.trim());
+                if cond.is_empty() || cond == "\"otherwise\"" || cond == "\"else\"" {
+                    format!("{} &\"otherwise\"", val)
+                } else {
+                    format!("{} &\"if\" {}", val, cond)
+                }
+            } else {
+                latex_to_typst(row.trim())
+            }
+        })
+        .collect();
+    format!("cases({})", rows.join(", "))
+}
+
+/// Strip leading `\text{if}`, `\text{otherwise}`, etc. from a cases condition
+/// so the surrounding `"if"` keyword in Typst doesn't duplicate it.
+fn strip_text_if(s: &str) -> &str {
+    let s = s.trim();
+    for p in &[r"\text{if }", r"\text{if}", r"\text{ if }", r"\text{ if}",
+               r"\text{otherwise}", r"\text{else}"] {
+        if s.starts_with(p) { return &s[p.len()..]; }
+    }
+    s
+}
+
+/// Convert a matrix body (rows: `\\`, cols: `&`) to Typst `mat(...)` args.
+/// Output: rows separated by `;`, columns by `,`.
+fn math_matrix_body(body: &str) -> String {
+    body.split("\\\\")
+        .filter(|r| !r.trim().is_empty())
+        .map(|row| {
+            row.split('&')
+               .map(|c| latex_to_typst(c.trim()))
+               .collect::<Vec<_>>()
+               .join(", ")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 fn escape_typst_text(s: &str) -> String {
     s.replace('\n', " ")

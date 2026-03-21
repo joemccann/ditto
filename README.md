@@ -101,7 +101,7 @@ Currently in active development. Some GFM features are partially implemented:
 - ⚠️ Text wrapping: Lines may overflow on very long text
 - ⚠️ Page breaks: All content on a single page (multi-page support in progress)
 - ⚠️ Math rendering: LaTeX math not yet implemented
-- ⚠️ HTML content: Not rendered (logged as warnings)
+- ✅ HTML content: Common inline and block HTML tags rendered via Typst mapping
 
 ## Roadmap
 
