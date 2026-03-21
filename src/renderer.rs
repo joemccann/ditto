@@ -5,6 +5,9 @@ use comrak::{
     parse_document,
 };
 use std::collections::HashMap;
+
+use crate::highlighter::highlight_code_to_typst;
+use crate::html::{InlineTag, block_html_to_typst, inline_tag_to_typst, is_void_inline, parse_inline_tag};
 use std::fs;
 use std::path::{Path, PathBuf};
 use typst::foundations::{Bytes, Datetime, Smart};
@@ -148,10 +151,20 @@ fn markdown_options() -> Options<'static> {
     options
 }
 
+/// Entry on the inline HTML stack: tracks the Typst suffix emitted on close.
+struct InlineHtmlFrame {
+    tag: String,
+    suffix: String,
+}
+
 struct TypstRenderer {
     asset_root: PathBuf,
     cache_dir: PathBuf,
     list_stack: Vec<ListType>,
+    syntax_theme: String,
+    mono_font: String,
+    /// Open inline-HTML tag stack so close-tags emit the right Typst suffix.
+    html_inline_stack: Vec<InlineHtmlFrame>,
 }
 
 impl TypstRenderer {
@@ -167,6 +180,9 @@ impl TypstRenderer {
             asset_root,
             cache_dir,
             list_stack: Vec::new(),
+            syntax_theme: config.syntax_theme.clone(),
+            mono_font: config.fonts.monospace.clone(),
+            html_inline_stack: Vec::new(),
         }
     }
 
@@ -236,8 +252,11 @@ impl TypstRenderer {
                     Ok(format!("$ {} $", math.literal))
                 }
             }
-            NodeValue::HtmlInline(html) => Ok(escape_typst_text(html)),
-            NodeValue::HtmlBlock(html) => Ok(format!("{}\n\n", escape_typst_text(&html.literal))),
+            NodeValue::HtmlInline(html) => Ok(self.handle_html_inline(html)),
+            NodeValue::HtmlBlock(html) => {
+                let rendered = block_html_to_typst(&html.literal);
+                if rendered.is_empty() { Ok(String::new()) } else { Ok(rendered) }
+            }
             _ => self.render_children(node),
         }
     }
@@ -251,6 +270,55 @@ impl TypstRenderer {
             }
         }
         Ok(out)
+    }
+
+    /// Handle a raw inline HTML tag fragment.
+    ///
+    /// Comrak emits each tag (`<b>`, `bold text`, `</b>`) as separate AST nodes.
+    /// We maintain `html_inline_stack` across calls so opening tags push a Typst
+    /// prefix and closing tags pop+emit the matching suffix.
+    fn handle_html_inline(&mut self, html: &str) -> String {
+        match parse_inline_tag(html) {
+            // Void elements (self-closing by definition)
+            InlineTag::SelfClose { ref name } | InlineTag::Open { ref name, .. }
+                if is_void_inline(name) =>
+            {
+                match name.as_str() {
+                    "br" | "wbr" => "\\
+".to_string(),
+                    "hr" => "#line(length: 100%)
+
+".to_string(),
+                    _ => String::new(),
+                }
+            }
+            // Paired open tag → emit prefix, push suffix onto stack
+            InlineTag::Open { name, attrs } => {
+                let (prefix, suffix) = inline_tag_to_typst(&name, &attrs);
+                self.html_inline_stack.push(InlineHtmlFrame { tag: name, suffix });
+                prefix
+            }
+            // Close tag → pop matching frame, emit suffix
+            InlineTag::Close { name } => {
+                if let Some(pos) = self.html_inline_stack.iter().rposition(|f| f.tag == name) {
+                    let mut out = String::new();
+                    let inner: Vec<_> = self.html_inline_stack.drain(pos + 1..).collect();
+                    for f in inner.into_iter().rev() { out.push_str(&f.suffix); }
+                    let frame = self.html_inline_stack.remove(pos);
+                    out.push_str(&frame.suffix);
+                    out
+                } else {
+                    String::new()
+                }
+            }
+            // Non-void self-closing: emit as open+close with empty content
+            InlineTag::SelfClose { name } => {
+                let (prefix, suffix) = inline_tag_to_typst(&name, &[]);
+                format!("{}{}", prefix, suffix)
+            }
+            // Unknown / not a real tag: escape and pass through
+            InlineTag::Unknown => crate::html::escape_typst_text(html),
+        }
     }
 
     fn render_list_item<'a>(&mut self, node: &'a AstNode<'a>) -> Result<String> {
@@ -275,20 +343,7 @@ impl TypstRenderer {
 
     fn render_code_block(&self, block: &NodeCodeBlock) -> String {
         let lang = block.info.split_whitespace().next().unwrap_or_default();
-        let code = escape_typst_text(&block.literal);
-        let header = if lang.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "#text(fill: luma(90), size: 10pt)[{}]\n",
-                escape_typst_text(lang)
-            )
-        };
-
-        format!(
-            "#block(fill: luma(245), inset: 10pt, radius: 4pt)[\n{}#text(font: (\"DejaVu Sans Mono\",), [{}])\n]\n\n",
-            header, code
-        )
+        highlight_code_to_typst(&block.literal, lang, &self.mono_font, &self.syntax_theme)
     }
 
     fn render_image<'a>(&mut self, node: &'a AstNode<'a>, url: &str) -> Result<String> {

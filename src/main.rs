@@ -1,4 +1,6 @@
 mod cli;
+mod highlighter;
+mod html;
 mod renderer;
 
 use anyhow::Result;
