@@ -1555,18 +1555,19 @@ pub fn format_image_typst_sized(info: &ImageInfo, alt: &str, hint: &SizeHint) ->
 /// Emits a grey rounded box with the alt text (or the URL if no alt text) so
 /// the PDF is still complete and legible when an image is unavailable.
 pub fn missing_image_fallback(url: &str, alt: &str) -> String {
-    let label = if !alt.is_empty() {
-        escape_typst_text(alt)
-    } else {
-        // Use the last path component of the URL as a short label
-        let short = url
+    // Always include the filename so diagnostics are easy — even when alt text is set.
+    let short_url = {
+        let s = url
             .split('/')
             .filter(|s| !s.is_empty())
             .last()
             .unwrap_or(url);
-        // Strip query string
-        let short = short.split('?').next().unwrap_or(short);
-        escape_typst_text(short)
+        s.split('?').next().unwrap_or(s)
+    };
+    let label = if !alt.is_empty() {
+        format!("{} ({})", escape_typst_text(alt), escape_typst_text(short_url))
+    } else {
+        escape_typst_text(short_url)
     };
 
     format!(
@@ -1603,12 +1604,13 @@ pub fn css_length_to_typst(val: &str) -> Option<String> {
         let n: f64 = v.trim_end_matches("px").trim().parse().ok()?;
         return Some(format!("{:.1}pt", n * 0.75));
     }
-    if v.ends_with("em") {
-        return Some(v.to_string());
-    }
     if v.ends_with("rem") {
+        // `rem` has no direct Typst equivalent; map to `em` (root-relative ≈ em in PDF context).
         let n = v.trim_end_matches("rem");
         return Some(format!("{}em", n));
+    }
+    if v.ends_with("em") {
+        return Some(v.to_string());
     }
     if v.ends_with("pt") || v.ends_with("mm") || v.ends_with("cm") || v.ends_with("in") {
         return Some(v.to_string());
@@ -2340,12 +2342,20 @@ mod image_tests {
         // The renderer should not bubble an error when a local image is missing;
         // it should emit the fallback placeholder box and continue.
         let dir = TempDir::new().unwrap();
+
+        // Case 1: alt text provided — fallback label uses alt text.
         let md = "# Test\n\n![Missing image](nonexistent.png)\n\nSome text.\n";
         let config = test_config(&dir);
-        // markdown_to_typst should succeed (fallback is used)
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
         assert!(typst_src.contains("\\[Image:"), "expected fallback placeholder, got:\n{typst_src}");
-        assert!(typst_src.contains("nonexistent"), "should include image name in fallback:\n{typst_src}");
+        // When alt text is present, the fallback uses the alt text as the label.
+        assert!(typst_src.contains("Missing image"), "should use alt text in fallback:\n{typst_src}");
+
+        // Case 2: no alt text — fallback label uses filename.
+        let md2 = "# Test\n\n![](nonexistent.png)\n\nSome text.\n";
+        let typst_src2 = crate::renderer::markdown_to_typst_pub(md2, &config).unwrap();
+        assert!(typst_src2.contains("\\[Image:"), "expected fallback placeholder, got:\n{typst_src2}");
+        assert!(typst_src2.contains("nonexistent.png"), "should include filename in fallback:\n{typst_src2}");
     }
 
     #[test]
