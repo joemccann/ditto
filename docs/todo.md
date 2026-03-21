@@ -33,14 +33,17 @@ Current state:
 - Fidelity still needs polishing for edge cases and nesting behavior.
 
 TODO:
-- [ ] Improve nested list indentation and spacing fidelity
-- [ ] Improve ordered list numbering behavior in complex nesting
-- [ ] Polish task list layout and spacing
-- [ ] Respect GFM table alignment markers (`:---`, `:---:`, `---:`)
-- [ ] Verify autolink behavior against GFM expectations
-- [ ] Verify footnote support end-to-end
-- [ ] Verify definition list support end-to-end
-- [ ] Add representative GFM compatibility fixtures
+- [x] Improve nested list indentation and spacing fidelity
+- [x] Improve ordered list numbering behavior in complex nesting
+- [x] Polish task list layout and spacing (☐/☑ glyphs, proper bullet marker)
+- [x] Respect GFM table alignment markers (`:---`, `:---:`, `---:`) via per-cell `table.cell(align:…)`
+- [x] Verify autolink behavior against GFM expectations (compact `#link(url)` form when label == url)
+- [x] Verify footnote support end-to-end (superscript refs + footnote section at doc end)
+- [x] Verify definition list support end-to-end (`#strong[term]` + `#pad` for details)
+- [x] Add representative GFM compatibility fixtures (gfm-fixture.md + 35 unit tests in `gfm_tests`)
+- [x] Fix `@` escaping in `escape_typst_text` to prevent `@label` citation errors
+- [x] Fix `rem` CSS unit conversion (was shadowed by `em` branch)
+- [x] Fix missing-image fallback to always include filename
 
 ### 2. Table of contents improvements
 

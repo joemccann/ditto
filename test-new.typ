@@ -2,39 +2,25 @@
 #set text(font: ("Libertinus Serif",), size: 12pt)
 #show raw: set text(font: ("DejaVu Sans Mono",), size: 11.04pt)
 #show link: set text(fill: blue)
-#pagebreak()
-= Table of Contents
-- Markdown to PDF Test Document
-  - Features Supported
-    - Basic Text Formatting
-    - Lists
-    - Blockquote
-    - Code
-    - Links and Images
-    - Horizontal Rule
-    - Tables
-    - Additional GFM Features
-#pagebreak()
-
-= Markdown to PDF Test Document
+= Markdown to PDF Test Document <markdown-to-pdf-test-document>
 
 This is a test document to demonstrate the markdown to PDF converter capabilities.
 
-== Features Supported
+== Features Supported <features-supported>
 
-=== Basic Text Formatting
+=== Basic Text Formatting <basic-text-formatting>
 
 This document tests #strong[bold text], #emph[italic text], and #emph[#strong[bold italic]] text. It also tests #strike[strikethrough] text.
 
-=== Lists
+=== Lists <lists>
 
 Unordered list:
 
 - Item 1
 - Item 2
 
-- Nested item 2.1
-- Nested item 2.2
+  - Nested item 2.1
+  - Nested item 2.2
 - Item 3
 
 Ordered list:
@@ -45,14 +31,17 @@ Ordered list:
 
 Task lists:
 
+- ☐  Incomplete task
+- ☑  Completed task
+- ☐  Another task
 
-=== Blockquote
+=== Blockquote <blockquote>
 
 #block(inset: (left: 12pt), stroke: (left: 1pt + luma(180)))[
 This is a blockquote. It can span multiple lines.
 ]
 
-=== Code
+=== Code <code>
 
 Inline `code` looks like this.
 
@@ -65,33 +54,33 @@ Inline `code` looks like this.
 #text(fill: rgb("#a71d5d"), weight: "bold")[def]#text(fill: rgb("#323232"))[ ]#text(fill: rgb("#323232"), weight: "bold")[greet]#text(fill: rgb("#323232"))[(]#text(fill: rgb("#323232"))[name]#text(fill: rgb("#323232"))[)]#text(fill: rgb("#323232"))[:]\
 #text(fill: rgb("#323232"))[    ]#text(fill: rgb("#a71d5d"), weight: "bold")[return]#text(fill: rgb("#323232"))[ ]#text(fill: rgb("#a71d5d"), weight: "bold")[f]#text(fill: rgb("#183691"))["]#text(fill: rgb("#183691"))[Hello, ]#text(fill: rgb("#323232"))[{]#text(fill: rgb("#323232"))[name]#text(fill: rgb("#323232"))[}]#text(fill: rgb("#183691"))[!]#text(fill: rgb("#183691"))["]]
 
-=== Links and Images
+=== Links and Images <links-and-images>
 
 #link("https://github.com", [Link to GitHub])
 
-=== Horizontal Rule
+=== Horizontal Rule <horizontal-rule>
 
 #line(length: 100%)
 
-=== Tables
+=== Tables <tables>
 
 #table(
-  columns: 3,
-  stroke: luma(180),
+  columns: (1fr, 1fr, 1fr),
+  stroke: luma(200),
   inset: 6pt,
-  align: left,
-  [Header 1],
-  [Header 2],
-  [Header 3],
-  [Cell 1],
-  [Cell 2],
-  [Cell 3],
-  [Cell 4],
-  [Cell 5],
-  [Cell 6]
+  fill: (col, row) => if row == 0 { luma(230) } else { white },
+  table.cell(align: left)[#strong[Header 1]],
+  table.cell(align: left)[#strong[Header 2]],
+  table.cell(align: left)[#strong[Header 3]],
+  table.cell(align: left)[Cell 1],
+  table.cell(align: left)[Cell 2],
+  table.cell(align: left)[Cell 3],
+  table.cell(align: left)[Cell 4],
+  table.cell(align: left)[Cell 5],
+  table.cell(align: left)[Cell 6]
 )
 
-=== Additional GFM Features
+=== Additional GFM Features <additional-gfm-features>
 
 - Task lists (shown above)
 - Strikethrough (shown above)

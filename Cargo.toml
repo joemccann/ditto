@@ -22,3 +22,7 @@ tempfile = "3.13"
 [[bin]]
 name = "md-to-pdf"
 path = "src/main.rs"
+
+[lib]
+name = "md_to_pdf"
+path = "src/lib.rs"

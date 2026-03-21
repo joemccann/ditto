@@ -718,6 +718,7 @@ pub fn escape_typst_text(s: &str) -> String {
     s.replace('\n', " ")
         .replace('\\', "\\\\")
         .replace('#', "\\#")
+        .replace('@', "\\@") // Prevent @label citation syntax in Typst
         .replace('[', "\\[")
         .replace(']', "\\]")
         .replace('{', "\\{")

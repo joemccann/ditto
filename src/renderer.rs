@@ -121,50 +121,51 @@ pub fn render_markdown_to_pdf(
 }
 
 /// Public entry point for tests — converts markdown to Typst source without
-/// compiling to PDF.  Not part of the public API; only exported for `#[cfg(test)]`.
-#[cfg(test)]
+/// compiling to PDF.  Useful for snapshot testing and unit tests.
+#[doc(hidden)]
 pub fn markdown_to_typst_pub(markdown: &str, config: &RenderConfig) -> Result<String> {
     markdown_to_typst(markdown, config)
 }
 
 /// Test shim: expose `escape_typst_text` to integration tests.
-#[cfg(test)]
+/// Compiled only when running tests (unit or integration).
+#[doc(hidden)]
 pub fn escape_typst_text_pub(s: &str) -> String {
     escape_typst_text(s)
 }
 
 /// Test shim: expose `heading_label` to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn heading_label_pub(title: &str) -> String {
     heading_label(title)
 }
 
 /// Test shim: expose `latex_to_typst` to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn latex_to_typst_pub(latex: &str) -> String {
     latex_to_typst(latex)
 }
 
 /// Test shim: expose `typst_quoted_string` to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn typst_quoted_string_pub(s: &str) -> String {
     typst_quoted_string(s)
 }
 
 /// Test shim: expose `generate_typst_toc` to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn generate_typst_toc_pub(depth: u8) -> String {
     generate_typst_toc(depth)
 }
 
 /// Test shim: expose `extract_toc` to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn extract_toc_pub(markdown: &str) -> Vec<TocEntry> {
     extract_toc(markdown)
 }
 
 /// Test shim: expose `stable_name` (hash helper) to integration tests.
-#[cfg(test)]
+#[doc(hidden)]
 pub fn stable_name_pub(s: &str) -> String {
     stable_name(s)
 }
@@ -1360,6 +1361,7 @@ fn escape_typst_text(s: &str) -> String {
     s.replace('\n', " ")
         .replace('\\', "\\\\")
         .replace('#', "\\#")
+        .replace('@', "\\@") // Prevent @label citation syntax
         .replace('[', "\\[")
         .replace(']', "\\]")
         .replace('{', "\\{")

@@ -1,21 +1,17 @@
-mod cli;
-mod doctor;
-mod highlighter;
-mod html;
-mod renderer;
+// The binary re-uses the library modules. Declaring them here (instead of in
+// lib.rs) would cause duplicate compilation, so we use the lib crate.
+use md_to_pdf::cli::Cli;
+use md_to_pdf::renderer::{FontSet, RenderConfig, read_input, render_markdown_to_pdf};
 
 use anyhow::Result;
 use clap::Parser;
-
-use cli::Cli;
-use renderer::{FontSet, RenderConfig, read_input, render_markdown_to_pdf};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // --doctor: self-check mode (exits after printing report)
     if cli.doctor {
-        doctor::run()?;
+        md_to_pdf::doctor::run()?;
         return Ok(());
     }
 
