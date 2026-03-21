@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.pdf
+.DS_Store
+# Testing
+test-output/
+test-inputs/
+*.md.backup
