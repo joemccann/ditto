@@ -1,12 +1,14 @@
 # Ditto
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset=".github/light.svg">
-  <img alt="Ditto Logo" src=".github/light.svg">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/light.svg">
+    <img alt="Ditto Logo" src=".github/light.svg" width="100%">
+  </picture>
+</p>
 
-A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the <a href="https://typst.app">Typst</a> engine.
+<p align="center">A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the <a href="https://typst.app">Typst</a> engine.</p>
 
 
 ## Features
