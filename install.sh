@@ -10,13 +10,10 @@ if [ ! -f "$BINARY" ]; then
   exit 1
 fi
 
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="$HOME/.local/bin"
+mkdir -p "$INSTALL_DIR"
 
-if [ -w "$INSTALL_DIR" ]; then
-  ln -sf "$BINARY" "$INSTALL_DIR/ditto"
-else
-  sudo ln -sf "$BINARY" "$INSTALL_DIR/ditto"
-fi
+ln -sf "$BINARY" "$INSTALL_DIR/ditto"
 
 echo "✓ ditto installed → $(which ditto)"
 ditto --help | head -3
