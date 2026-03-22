@@ -5,8 +5,4 @@
 .DS_Store
 .md-to-pdf-cache/
 .venv/
-
-# Testing artifacts
-test-output/
-test-inputs/
-*.md.backup
+.pi/

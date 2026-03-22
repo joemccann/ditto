@@ -1,4 +1,4 @@
-# md-to-pdf
+# Ertigan
 
 A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the [Typst](https://typst.app) engine.
 

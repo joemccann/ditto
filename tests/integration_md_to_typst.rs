@@ -953,7 +953,8 @@ fn definition_list_two_separate_entries() {
 
 #[test]
 fn gfm_fixture_converts_without_error() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gfm-fixture.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/gfm-fixture.md");
     let md = std::fs::read_to_string(path).expect("gfm-fixture.md must exist");
     let dir = TempDir::new().unwrap();
     let src = md_to_typst(&md, &cfg(&dir)).unwrap();

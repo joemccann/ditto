@@ -477,7 +477,8 @@ fn snapshot_definition_list_multiple_terms() {
 
 #[test]
 fn snapshot_gfm_fixture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("gfm-fixture.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/gfm-fixture.md");
     let md = std::fs::read_to_string(path).expect("gfm-fixture.md must exist");
     let dir = TempDir::new().unwrap();
     let src = md_to_typst(&md, &cfg(&dir)).unwrap();
