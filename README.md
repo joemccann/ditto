@@ -8,8 +8,7 @@
   </picture>
 </p>
 
-<p align="center">A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the <a href="https://typst.app">Typst</a> engine.</p>
-
+<p align="center" width="80%">A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the <a href="https://typst.app">Typst</a> engine.</p>
 
 ## Features
 
