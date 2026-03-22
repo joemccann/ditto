@@ -17,6 +17,23 @@ A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markd
 
 ## Installation
 
+### Quick install
+
+```bash
+./install.sh
+```
+
+Builds the release binary and symlinks it to `/usr/local/bin/ditto` so it's available globally.
+
+### Manual install
+
+```bash
+cargo build --release
+# Binary is at target/release/ditto
+```
+
+### Via cargo
+
 ```bash
 cargo install --path .
 ```
