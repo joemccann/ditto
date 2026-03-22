@@ -48,7 +48,7 @@ impl CheckResult {
 
 pub fn run() -> Result<()> {
     eprintln!();
-    eprintln!("  md-to-pdf — doctor / self-check");
+    eprintln!("  ditto — doctor / self-check");
     eprintln!("  ─────────────────────────────────");
 
     let checks = vec![
@@ -87,7 +87,7 @@ pub fn run() -> Result<()> {
         eprintln!();
         std::process::exit(1);
     } else {
-        eprintln!("  All checks passed. md-to-pdf is ready to use.");
+        eprintln!("  All checks passed. ditto is ready to use.");
         eprintln!();
     }
     Ok(())
@@ -219,7 +219,7 @@ fn check_cache_dir() -> Check {
 
     let dir: PathBuf = std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".md-to-pdf-cache");
+        .join(".ditto-cache");
 
     match std::fs::create_dir_all(&dir) {
         Err(e) => Check {

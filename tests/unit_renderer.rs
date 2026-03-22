@@ -4,7 +4,7 @@
 //! generation, math translation, TOC generation, frontmatter parsing — without
 //! spawning any Typst compilation.
 
-use md_to_pdf::renderer::{
+use ditto::renderer::{
     FontSet, RenderConfig, TocEntry, escape_typst_text_pub as escape_typst_text,
     extract_toc_pub as extract_toc, generate_typst_toc_pub as generate_typst_toc,
     generate_typst_toc_titled_pub as generate_typst_toc_titled, heading_label_pub as heading_label,

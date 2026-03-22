@@ -1,11 +1,11 @@
 [package]
-name = "md-to-pdf"
+name = "ditto"
 version = "0.1.0"
 edition = "2024"
 description = "A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the Typst engine"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/joemccann/md-to-pdf"
+repository = "https://github.com/joemccann/ditto"
 keywords = ["markdown", "pdf", "typst", "gfm", "cli"]
 categories = ["command-line-utilities", "text-processing"]
 
@@ -24,11 +24,11 @@ ureq = "2.12"
 tempfile = "3.13"
 
 [[bin]]
-name = "md-to-pdf"
+name = "ditto"
 path = "src/main.rs"
 
 [lib]
-name = "md_to_pdf"
+name = "ditto"
 path = "src/lib.rs"
 
 [profile.release]

@@ -4,7 +4,7 @@
 //! the correct Typst markup.  No PDF compilation happens here — these tests
 //! are fast and deterministic.
 
-use md_to_pdf::renderer::{FontSet, RenderConfig, markdown_to_typst_pub as md_to_typst};
+use ditto::renderer::{FontSet, RenderConfig, markdown_to_typst_pub as md_to_typst};
 use tempfile::TempDir;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

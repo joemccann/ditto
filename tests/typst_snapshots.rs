@@ -13,7 +13,7 @@
 //! To regenerate snapshot files:
 //!   UPDATE_SNAPSHOTS=1 cargo test --test typst_snapshots
 
-use md_to_pdf::renderer::{FontSet, RenderConfig, markdown_to_typst_pub as md_to_typst};
+use ditto::renderer::{FontSet, RenderConfig, markdown_to_typst_pub as md_to_typst};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 

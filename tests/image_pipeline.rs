@@ -10,7 +10,7 @@
 //!  - Data-URI decoding (resolve_data_uri via markdown round-trips)
 //!  - Markdown → Typst round-trips exercising the full render path
 
-use md_to_pdf::renderer::{
+use ditto::renderer::{
     FontSet, ImageInfo, RenderConfig, SizeHint, css_length_to_typst, detect_image_format,
     format_image_typst, format_image_typst_sized, is_svg_bytes,
     markdown_to_typst_pub as md_to_typst, mime_to_ext, missing_image_fallback, sniff_image_magic,

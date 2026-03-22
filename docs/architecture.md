@@ -2,7 +2,7 @@
 
 ## Overview
 
-md-to-pdf converts Markdown to PDF in two stages:
+ditto converts Markdown to PDF in two stages:
 
 1. **Markdown → Typst source** — walk the comrak AST and emit Typst markup
 2. **Typst source → PDF** — compile in-process via the `typst` crate and write the PDF bytes

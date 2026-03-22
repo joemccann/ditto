@@ -19,14 +19,14 @@ This is a **Rust**-based CLI tool that converts *Markdown* to PDF via the
 ## Installation
 
 ```bash
-cargo install md-to-pdf
+cargo install ditto
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/example/md-to-pdf
-cd md-to-pdf
+git clone https://github.com/example/ditto
+cd ditto
 cargo build --release
 ```
 
@@ -37,7 +37,7 @@ cargo build --release
 ### Basic conversion
 
 ```
-md-to-pdf input.md output.pdf
+ditto input.md output.pdf
 ```
 
 ### With options

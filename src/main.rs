@@ -1,7 +1,7 @@
 // The binary re-uses the library modules. Declaring them here (instead of in
 // lib.rs) would cause duplicate compilation, so we use the lib crate.
-use md_to_pdf::cli::Cli;
-use md_to_pdf::renderer::{FontSet, RenderConfig, read_input, render_markdown_to_pdf};
+use ditto::cli::Cli;
+use ditto::renderer::{FontSet, RenderConfig, read_input, render_markdown_to_pdf};
 
 use anyhow::Result;
 use clap::Parser;
@@ -11,7 +11,7 @@ fn main() -> Result<()> {
 
     // --doctor: self-check mode (exits after printing report)
     if cli.doctor {
-        md_to_pdf::doctor::run()?;
+        ditto::doctor::run()?;
         return Ok(());
     }
 

@@ -1,6 +1,6 @@
 # Known Limitations
 
-This document records all known incompatibilities between md-to-pdf and the
+This document records all known incompatibilities between ditto and the
 CommonMark / GitHub Flavored Markdown (GFM) specifications, including
 unsupported HTML tags, unsupported LaTeX/math commands, and remaining GFM gaps.
 
@@ -12,7 +12,7 @@ Each entry states the current behaviour so you know exactly what to expect.
 
 ### 1.1 Supported HTML tags
 
-md-to-pdf translates a fixed set of HTML tags embedded in Markdown.
+ditto translates a fixed set of HTML tags embedded in Markdown.
 Tags **not** in either list below are silently stripped; their text content is
 preserved.
 
@@ -128,7 +128,7 @@ passed through as-is, which will appear literally in the PDF. Numeric entities
 
 ## 2. Math / LaTeX
 
-md-to-pdf translates LaTeX-style math expressions to Typst native math syntax.
+ditto translates LaTeX-style math expressions to Typst native math syntax.
 Most common constructs work, but the following are known to be incomplete.
 
 ### 2.1 Supported math constructs
@@ -258,7 +258,7 @@ Typst. Complex multi-column alignment (`&\quad&`) may not render correctly.
 ### 3.2 Unsupported GFM extensions
 
 **Wikilinks `[[Page Name]]`**
-Not enabled. comrak supports wikilinks as an opt-in extension; md-to-pdf does
+Not enabled. comrak supports wikilinks as an opt-in extension; ditto does
 not enable it and the `[[…]]` syntax is treated as plain text.
 
 **Spoiler / hidden text**
@@ -324,7 +324,7 @@ render in plain monospace without token colouring.
 ### 4.3 Tight vs. loose lists
 
 Whether a list is tight (no blank lines between items) or loose (blank lines
-between items) affects Markdown rendering. md-to-pdf renders all list items
+between items) affects Markdown rendering. ditto renders all list items
 with a newline after each, which may add extra vertical space in lists that a
 browser would render tightly.
 
@@ -420,7 +420,7 @@ is no manual `\pagebreak` or `\nopagebreak` equivalent in Markdown.
 ### 6.5 Right-to-left text
 
 RTL languages are not explicitly configured. The underlying Typst engine has
-some RTL support, but md-to-pdf does not expose `dir: rtl` settings.
+some RTL support, but ditto does not expose `dir: rtl` settings.
 
 ---
 

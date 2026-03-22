@@ -13,11 +13,11 @@ This document has a table of contents generated automatically.
 
 ### 1.1 Installation
 
-Install the tool with `cargo install md-to-pdf`.
+Install the tool with `cargo install ditto`.
 
 ### 1.2 Basic Usage
 
-Run `md-to-pdf input.md output.pdf`.
+Run `ditto input.md output.pdf`.
 
 ## Chapter 2: Advanced Features
 

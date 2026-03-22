@@ -73,7 +73,7 @@ set -euo pipefail
 OUTPUT="${1:-output.pdf}"
 INPUT="${2:-README.md}"
 
-md-to-pdf --preset a4 --toc "$INPUT" "$OUTPUT"
+ditto --preset a4 --toc "$INPUT" "$OUTPUT"
 echo "Generated: $OUTPUT"
 ```
 

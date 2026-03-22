@@ -67,11 +67,11 @@ impl Preset {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "md-to-pdf",
+    name = "ditto",
     version,
     about = "Convert Markdown to PDF with full GFM, math, and syntax-highlighting support.",
     long_about = "\
-md-to-pdf converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF using a \
+ditto converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF using a \
 pure-Rust Typst engine.  The tool supports tables, task lists, fenced code blocks \
 with syntax highlighting, LaTeX math ($…$ and $$…$$), footnotes, remote image \
 caching, and an auto-generated table of contents.
@@ -79,34 +79,34 @@ caching, and an auto-generated table of contents.
 EXAMPLES
 
   # Basic conversion
-  md-to-pdf README.md README.pdf
+  ditto README.md README.pdf
 
   # US-Letter, 14 pt font, custom body + mono fonts
-  md-to-pdf --preset letter --font-size 14 \\
+  ditto --preset letter --font-size 14 \\
             --font-family \"EB Garamond\" --mono-font-family \"Fira Code\" \\
             report.md report.pdf
 
   # Presentation slide deck
-  md-to-pdf --preset slides --no-toc slides.md slides.pdf
+  ditto --preset slides --no-toc slides.md slides.pdf
 
   # Dark code theme, skip remote images, custom cache
-  md-to-pdf --syntax-theme \"base16-ocean.dark\" --no-remote-images \\
+  ditto --syntax-theme \"base16-ocean.dark\" --no-remote-images \\
             --cache-dir /tmp/mdcache input.md out.pdf
 
   # Table of contents — headings 1 and 2 only
-  md-to-pdf --toc --toc-depth 2 big-doc.md big-doc.pdf
+  ditto --toc --toc-depth 2 big-doc.md big-doc.pdf
 
   # Check your environment (fonts, Typst engine, …)
-  md-to-pdf --doctor
+  ditto --doctor
 
   # Read from stdin
-  cat README.md | md-to-pdf - output.pdf",
+  cat README.md | ditto - output.pdf",
     after_help = "SYNTAX-HIGHLIGHTING THEMES
 
   InspiredGitHub (default), base16-ocean.dark, base16-ocean.light,
   base16-eighties.dark, base16-mocha.dark, Solarized (dark), Solarized (light)
 
-TIP: Run `md-to-pdf --doctor` to verify that required fonts are available \
+TIP: Run `ditto --doctor` to verify that required fonts are available \
 and that the Typst engine is working correctly."
 )]
 pub struct Cli {
@@ -197,7 +197,7 @@ pub struct Cli {
     pub no_remote_images: bool,
 
     /// Directory used for cached remote images.
-    /// Defaults to `.md-to-pdf-cache/` next to the input file (or the
+    /// Defaults to `.ditto-cache/` next to the input file (or the
     /// current working directory when reading from stdin).
     #[arg(long, value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,

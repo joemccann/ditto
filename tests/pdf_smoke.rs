@@ -15,7 +15,7 @@
 //! they run as part of `cargo test`, but can be excluded with
 //! `cargo test --test integration_md_to_typst --test typst_snapshots`.
 
-use md_to_pdf::renderer::{FontSet, RenderConfig, render_markdown_to_pdf};
+use ditto::renderer::{FontSet, RenderConfig, render_markdown_to_pdf};
 use tempfile::TempDir;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

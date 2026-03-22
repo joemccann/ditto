@@ -362,11 +362,11 @@ impl TypstRenderer {
             .as_ref()
             .and_then(|path| path.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        // Use the explicit cache-dir override, or default to .md-to-pdf-cache/ next to the input
+        // Use the explicit cache-dir override, or default to .ditto-cache/ next to the input
         let cache_dir = config
             .cache_dir_override
             .clone()
-            .unwrap_or_else(|| asset_root.join(".md-to-pdf-cache"));
+            .unwrap_or_else(|| asset_root.join(".ditto-cache"));
         let _ = fs::create_dir_all(&cache_dir);
         Self {
             asset_root,

@@ -3,6 +3,6 @@
 *.pdf
 *.typ
 .DS_Store
-.md-to-pdf-cache/
+.ditto-cache/
 .venv/
 .pi/

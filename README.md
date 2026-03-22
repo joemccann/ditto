@@ -1,4 +1,4 @@
-# Ertigan
+# Ditto
 
 A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markdown) to PDF via the [Typst](https://typst.app) engine.
 
@@ -24,32 +24,32 @@ cargo install --path .
 ## Usage
 
 ```
-md-to-pdf [OPTIONS] <INPUT> <OUTPUT>
-md-to-pdf --doctor
+ditto [OPTIONS] <INPUT> <OUTPUT>
+ditto --doctor
 ```
 
 ### Quick examples
 
 ```bash
 # Basic conversion
-md-to-pdf README.md README.pdf
+ditto README.md README.pdf
 
 # US Letter, 14 pt, custom fonts
-md-to-pdf --preset letter --font-size 14 \
+ditto --preset letter --font-size 14 \
           --font-family "EB Garamond" --mono-font-family "Fira Code" \
           report.md report.pdf
 
 # Slide deck (16:9)
-md-to-pdf --preset slides --no-toc slides.md slides.pdf
+ditto --preset slides --no-toc slides.md slides.pdf
 
 # TOC — H1 and H2 only
-md-to-pdf --toc --toc-depth 2 big-doc.md big-doc.pdf
+ditto --toc --toc-depth 2 big-doc.md big-doc.pdf
 
 # Dark code theme, skip remote images
-md-to-pdf --syntax-theme "base16-ocean.dark" --no-remote-images doc.md doc.pdf
+ditto --syntax-theme "base16-ocean.dark" --no-remote-images doc.md doc.pdf
 
 # Self-check
-md-to-pdf --doctor
+ditto --doctor
 ```
 
 ## Options
@@ -108,12 +108,12 @@ toc_depth: 3
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--no-remote-images` | off | Skip http/https image downloads |
-| `--cache-dir DIR` | `.md-to-pdf-cache/` | Remote-image cache location |
+| `--cache-dir DIR` | `.ditto-cache/` | Remote-image cache location |
 
 ### Doctor / self-check
 
 ```bash
-md-to-pdf --doctor
+ditto --doctor
 ```
 
 Runs diagnostics:
@@ -140,7 +140,7 @@ toc_depth: 2
 ## Development
 
 ```bash
-cargo build --release   # release binary → target/release/md-to-pdf
+cargo build --release   # release binary → target/release/ditto
 cargo test              # full test suite (725+ tests)
 cargo clippy            # lint
 cargo fmt               # format
