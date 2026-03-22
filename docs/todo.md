@@ -4,129 +4,167 @@
 
 Implemented foundation:
 
-- headings
+- headings (ATX and setext)
 - paragraphs
-- lists
+- lists (bullet and ordered)
+- nested lists
+- ordered list numbering with non-1 starts
 - task lists
 - blockquotes
 - inline code
-- code blocks
-- syntax highlighting for fenced code blocks
-- links
-- local images
-- remote images with caching
-- tables
+- code blocks with language tags
+- syntax highlighting for fenced code blocks (100+ languages via Syntect)
+- links, autolinks, reference-style links
+- local raster images (PNG, JPEG, GIF, WebP, BMP, TIFF, AVIF)
+- local SVG images
+- remote images with HTTP caching (ETag / Last-Modified)
+- data-URI images (`data:image/png;base64,…`)
+- tables with per-column alignment
 - horizontal rules
+- strikethrough
+- footnotes
+- definition / description lists
+- GitHub Alerts (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`)
+- superscript (`^text^`) and subscript (`~text~`)
+- underline (`__text__`)
+- hard line breaks (two trailing spaces → `\\\n`)
+- loose list vertical spacing (`#v(0.5em)` between loose items)
 - pagination
-- table of contents generation
+- table of contents generation (via Typst `#outline()`)
+- page-numbered TOC with real Typst page numbers
+- clickable TOC links (via heading `<label>` anchors)
+- TOC enable/disable support
+- TOC depth control
+- TOC title from front matter
+- duplicate heading label disambiguation
 - improved math / LaTeX support
-- raw HTML-in-Markdown handling strategy
+- raw HTML-in-Markdown translation (inline and block)
+- CLI font configuration
+- CLI theme support
+- remote image controls (`--no-remote-images`, `--cache-dir`)
+- doctor / self-check support (`--doctor`)
+- presets for page / layout sizes (a4, letter, a5, legal, slides)
+- YAML front-matter parsing (toc, toc_depth, toc_title, no_toc)
+- stdin input (`-`)
+- broad automated test coverage
 
-This is now a strong Rust-native foundation, but it still does **not** fully satisfy the original goal of supporting every Markdown feature and full GitHub Flavored Markdown fidelity.
+Current automated validation:
+
+- unit tests (renderer helpers, HTML translator, math converter)
+- integration tests (Markdown → Typst round-trips)
+- Typst snapshot tests (golden .typ files)
+- PDF smoke tests (end-to-end Typst compile)
+- image pipeline tests (format detection, caching, fallbacks)
+- regression fixtures
+
+Latest known status:
+
+- **725 tests passing**
+- **0 failures**
+
+This is a strong Rust-native Markdown-to-PDF CLI with broad feature support.
+Known incompatibilities are documented in [docs/known-limitations.md](known-limitations.md).
+
+---
 
 ## Remaining work
 
-### 1. GFM fidelity polishing
+### 1. HTML fidelity improvements
 
 Current state:
-- Core GFM features are implemented.
-- Fidelity still needs polishing for edge cases and nesting behavior.
+- Raw HTML-in-Markdown has a real handling strategy with broad tag support.
+- Known gaps are documented in `docs/known-limitations.md` §1.
+- `<table>` in HTML blocks uses a fixed single-column layout.
+- `<ol start="…">` in HTML blocks does not honour the `start` attribute.
+- Only `color` and `font-size` CSS properties are translated on `<span>`.
 
 TODO:
-- [x] Improve nested list indentation and spacing fidelity
-- [x] Improve ordered list numbering behavior in complex nesting
-- [x] Polish task list layout and spacing (☐/☑ glyphs, proper bullet marker)
-- [x] Respect GFM table alignment markers (`:---`, `:---:`, `---:`) via per-cell `table.cell(align:…)`
-- [x] Verify autolink behavior against GFM expectations (compact `#link(url)` form when label == url)
-- [x] Verify footnote support end-to-end (superscript refs + footnote section at doc end)
-- [x] Verify definition list support end-to-end (`#strong[term]` + `#pad` for details)
-- [x] Add representative GFM compatibility fixtures (gfm-fixture.md + 35 unit tests in `gfm_tests`)
-- [x] Fix `@` escaping in `escape_typst_text` to prevent `@label` citation errors
-- [x] Fix `rem` CSS unit conversion (was shadowed by `em` branch)
-- [x] Fix missing-image fallback to always include filename
+- [ ] Fix `<table>` column counting in HTML blocks to match actual cell count
+- [ ] Honour `<ol start="…">` in HTML blocks
+- [ ] Expand `<span>` CSS support to include `background-color` and `font-weight`
+- [ ] Add support for more named CSS colours beyond the current 10
 
-### 2. Table of contents improvements
+### 2. Math fidelity improvements
 
 Current state:
-- TOC is generated
-- It is not yet fully document-aware
+- Math support covers the most common LaTeX constructs.
+- Known unsupported commands are documented in `docs/known-limitations.md` §2.
+- Unknown commands are passed through as `\cmd`, which may produce Typst
+  errors visible in stderr.
 
 TODO:
-- [ ] Generate page-numbered TOC
-- [ ] Add internal clickable navigation
-- [ ] Add CLI option to enable/disable TOC
-- [ ] Add CLI option for TOC depth (`--toc-depth`)
+- [ ] Add `\not` (negation prefix) support
+- [ ] Add `\mathcal`, `\mathfrak`, `\mathscr` font commands
+- [ ] Add `\cancel`, `\boxed`, `\overset`, `\underset`
+- [ ] Add `\xleftarrow`, `\xrightarrow`
+- [ ] Add `\bigoplus`, `\bigotimes`, `\bigsqcup` and other large operators
+- [ ] Add support for `array` environment with column format specifier
+- [ ] Add more regression fixtures for edge-case math input
 
-### 3. Image pipeline polish
+### 3. Front-matter improvements
 
 Current state:
-- Local and remote images work
-- Remote images are cached
-- Image behavior still needs refinement
+- Only `toc`, `toc_depth`, `toc_title`, and `no_toc` are parsed.
+- All other YAML keys are silently ignored.
 
 TODO:
-- [ ] Improve remote content-type / extension detection
-- [ ] Improve SVG edge-case handling
-- [ ] Improve image sizing heuristics
-- [ ] Improve caption and alt-text rendering
-- [ ] Add missing-image fallback rendering
-- [ ] Add cache invalidation / refresh policy
-- [ ] Add image-specific tests
+- [ ] Support `title`, `author`, `date` front-matter keys for PDF metadata
+- [ ] Support `lang` key for Typst `#set text(lang: …)`
+- [ ] Consider full YAML parsing instead of the current hand-rolled parser
 
-### 4. Typography and layout polish
+### 4. Image and asset polish
 
 Current state:
-- Good baseline layout exists
-- Styling and pagination heuristics need refinement
+- Local and remote images work with caching and fallbacks.
+- Known limitations are documented in `docs/known-limitations.md` §5.
 
 TODO:
-- [ ] Add configurable body font family
-- [ ] Add configurable monospace font family
-- [ ] Add theme/preset support
-- [ ] Improve page-break heuristics
-- [ ] Improve spacing around headings, lists, code blocks, and tables
-- [ ] Add print presets (A4, Letter, etc.)
+- [ ] Add Markdown-extension image sizing syntax support (`{width=50%}`)
+- [ ] Improve remote image cache invalidation strategy
+- [ ] Support `<img>` remote downloads inside raw HTML blocks
+- [ ] Improve fallback handling for corrupted or partially-downloaded images
 
-### 5. CLI and product polish
+### 5. Typography and visual polish
 
 Current state:
-- Core CLI works
-- Several user-facing controls are still missing
+- Typography controls exist.
+- Layout presets exist.
+- Output quality is good.
 
 TODO:
-- [ ] Add `--font-family`
-- [ ] Add `--mono-font-family`
-- [ ] Add `--theme`
-- [ ] Add `--toc` / `--no-toc`
-- [ ] Add `--toc-depth`
-- [ ] Add `--no-remote-images`
-- [ ] Add `--cache-dir`
-- [ ] Add `--self-check` or doctor mode
-- [ ] Improve help output and examples
+- [ ] Add more theme / preset variants if desired
+- [ ] Improve spacing / pagination heuristics for especially dense documents
+- [ ] Add `dir: rtl` / bidirectional text support
+- [ ] Add page-number offset control
 
-### 6. Testing and quality
+### 6. Packaging and productization
 
 Current state:
-- Manual validation done
-- Core automated quality coverage still missing
+- CLI works and is fully tested.
+- Known limitations are documented.
 
 TODO:
-- [ ] Add unit tests for Markdown -> Typst conversion helpers
-- [ ] Add integration tests for representative Markdown inputs
-- [ ] Add snapshot tests for generated Typst
-- [ ] Add PDF smoke tests
-- [ ] Add regression fixtures for tricky GFM cases
-- [ ] Add representative sample documents with expected outputs
+- [ ] Add end-user documentation for themes, fonts, TOC, remote images, and
+  doctor mode (possibly a `docs/user-guide.md`)
+- [ ] Add release / build instructions for distribution
+- [ ] Consider CI automation for tests and release artifacts
+- [ ] Add `--watch` flag for live re-render during editing
+- [ ] Add PDF metadata flags (`--title`, `--author`, `--date`)
+
+---
 
 ## Priority order
 
-Recommended implementation order:
+Recommended next order:
 
-1. [ ] GFM fidelity polishing
-2. [ ] TOC with page numbers and internal links
-3. [ ] Image pipeline polish
-4. [ ] CLI and typography polish
-5. [ ] Test coverage and regression protection
+1. [ ] Fix HTML block `<table>` column counting
+2. [ ] Honour `<ol start="…">` in HTML blocks
+3. [ ] Add key missing LaTeX commands (`\not`, `\mathcal`, `\cancel`, `\boxed`)
+4. [ ] Front-matter: `title` / `author` / `date` → PDF metadata
+5. [ ] Image sizing syntax (`{width=…}`)
+6. [ ] Documentation / productization
+
+---
 
 ## Goal reminder
 
@@ -138,4 +176,6 @@ Original target:
 - support images
 - produce PDF from a Rust CLI
 
-Current project is much closer, but still not yet at full fidelity for that goal.
+Current project is **close to complete** for practical use. Remaining gaps are
+catalogued in [`docs/known-limitations.md`](known-limitations.md) so users know
+exactly what to expect. No known correctness regressions.

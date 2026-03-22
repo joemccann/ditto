@@ -1,9 +1,12 @@
 /target
 **/*.rs.bk
-Cargo.lock
 *.pdf
+*.typ
 .DS_Store
-# Testing
+.md-to-pdf-cache/
+.venv/
+
+# Testing artifacts
 test-output/
 test-inputs/
 *.md.backup

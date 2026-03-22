@@ -1,13 +1,18 @@
 use anyhow::{Context, Result};
 use comrak::{
     Arena, Options,
-    nodes::{AstNode, ListType, NodeCodeBlock, NodeHeading, NodeLink, NodeValue, NodeTable, TableAlignment},
+    nodes::{
+        AlertType, AstNode, ListType, NodeAlert, NodeCodeBlock, NodeHeading, NodeLink, NodeTable,
+        NodeValue, TableAlignment,
+    },
     parse_document,
 };
 use std::collections::HashMap;
 
 use crate::highlighter::highlight_code_to_typst;
-use crate::html::{InlineTag, block_html_to_typst, inline_tag_to_typst, is_void_inline, parse_inline_tag};
+use crate::html::{
+    InlineTag, block_html_to_typst, inline_tag_to_typst, is_void_inline, parse_inline_tag,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use typst::foundations::{Bytes, Datetime, Smart};
@@ -95,7 +100,10 @@ pub fn render_markdown_to_pdf(
     config: RenderConfig,
 ) -> Result<RenderSummary> {
     let typst_source = markdown_to_typst(markdown, &config)?;
-    fs::write(output.with_extension("typ"), &typst_source).ok();
+    // Write intermediate .typ for debugging when MDPDF_DEBUG=1.
+    if std::env::var("MDPDF_DEBUG").as_deref() == Ok("1") {
+        fs::write(output.with_extension("typ"), &typst_source).ok();
+    }
     let world = TypstWorld::new(typst_source)?;
 
     let warned = compile::<PagedDocument>(&world);
@@ -189,7 +197,11 @@ fn markdown_to_typst(markdown: &str, config: &RenderConfig) -> Result<String> {
     } else {
         // `no_toc: true` in frontmatter is a convenient alias for `toc: false`
         let fm_no_toc = fm.no_toc.unwrap_or(false);
-        if fm_no_toc { false } else { fm.toc.unwrap_or(config.toc) }
+        if fm_no_toc {
+            false
+        } else {
+            fm.toc.unwrap_or(config.toc)
+        }
     };
     let toc_depth = fm.toc_depth.unwrap_or(config.toc_depth).clamp(1, 6);
     let toc_title = fm.toc_title.as_deref().unwrap_or("Table of Contents");
@@ -236,7 +248,12 @@ struct Frontmatter {
 }
 
 fn parse_frontmatter(markdown: &str) -> Frontmatter {
-    let mut fm = Frontmatter { toc: None, no_toc: None, toc_depth: None, toc_title: None };
+    let mut fm = Frontmatter {
+        toc: None,
+        no_toc: None,
+        toc_depth: None,
+        toc_title: None,
+    };
     let text = markdown.trim_start();
     if !text.starts_with("---") {
         return fm;
@@ -285,6 +302,14 @@ fn markdown_options() -> Options<'static> {
     options.extension.math_dollars = true;
     // Enable ```math ... ``` fenced blocks and $`...`$ syntax
     options.extension.math_code = true;
+    // GitHub Alerts: > [!NOTE], > [!TIP], etc.
+    options.extension.alerts = true;
+    // Superscript: ^text^
+    options.extension.superscript = true;
+    // Subscript: ~text~ (single tilde; double-tilde remains strikethrough)
+    options.extension.subscript = true;
+    // Underline: __text__ (double underscore)
+    options.extension.underline = true;
     options.parse.smart = true;
     options.render.unsafe_ = true;
     options
@@ -308,6 +333,9 @@ struct TypstRenderer {
     ordered_counter_stack: Vec<usize>,
     /// Nesting depth of the current list (0 = not inside a list).
     list_depth: usize,
+    /// Stack of tight/loose flags for open lists (innermost last).
+    /// `true` = tight (no blank lines between items); `false` = loose.
+    list_tight_stack: Vec<bool>,
     /// syntect theme name, e.g. "base16-ocean.dark" or "InspiredGitHub"
     syntax_theme: String,
     /// Monospace font name forwarded to code blocks
@@ -347,6 +375,7 @@ impl TypstRenderer {
             ordered_start_stack: Vec::new(),
             ordered_counter_stack: Vec::new(),
             list_depth: 0,
+            list_tight_stack: Vec::new(),
             syntax_theme: config.syntax_theme.clone(),
             mono_font: config.fonts.monospace.clone(),
             html_inline_stack: Vec::new(),
@@ -389,7 +418,10 @@ impl TypstRenderer {
                 // This ensures `#outline()` click-targets resolve correctly even
                 // when a document has repeated heading text (e.g. multiple "Overview"
                 // sections).
-                let count = self.heading_labels_seen.entry(base_label.clone()).or_insert(0);
+                let count = self
+                    .heading_labels_seen
+                    .entry(base_label.clone())
+                    .or_insert(0);
                 *count += 1;
                 let label = if *count == 1 {
                     base_label
@@ -406,13 +438,21 @@ impl TypstRenderer {
                 ))
             }
             NodeValue::Text(text) => Ok(escape_typst_text(text)),
-            NodeValue::SoftBreak | NodeValue::LineBreak => Ok(" ".to_string()),
+            NodeValue::SoftBreak => Ok(" ".to_string()),
+            NodeValue::LineBreak => Ok("\\\n".to_string()),
             NodeValue::Code(code) => Ok(format!("`{}`", escape_typst_code(&code.literal))),
             NodeValue::Strong => Ok(format!("#strong[{}]", self.render_inline_children(node)?)),
             NodeValue::Emph => Ok(format!("#emph[{}]", self.render_inline_children(node)?)),
             NodeValue::Strikethrough => {
                 Ok(format!("#strike[{}]", self.render_inline_children(node)?))
             }
+            // ── Inline extensions ──────────────────────────────────────────────
+            NodeValue::Superscript => Ok(format!("#super[{}]", self.render_inline_children(node)?)),
+            NodeValue::Subscript => Ok(format!("#sub[{}]", self.render_inline_children(node)?)),
+            NodeValue::Underline => Ok(format!(
+                "#underline[{}]",
+                self.render_inline_children(node)?
+            )),
             NodeValue::Link(NodeLink { url, .. }) => {
                 let label = self.render_inline_children(node)?;
                 let label_trimmed = label.trim();
@@ -435,14 +475,20 @@ impl TypstRenderer {
                     body.trim()
                 ))
             }
+            // ── GitHub Alerts: > [!NOTE], > [!TIP], > [!IMPORTANT], > [!WARNING], > [!CAUTION]
+            NodeValue::Alert(alert) => Ok(render_alert(alert, &self.render_children(node)?)),
             NodeValue::List(list) => {
                 // Push list context: type + starting counter.
                 let start = list.start;
                 self.list_stack.push(list.list_type);
-                self.ordered_start_stack.push(
-                    if list.list_type == ListType::Ordered { Some(start) } else { None }
-                );
+                self.ordered_start_stack
+                    .push(if list.list_type == ListType::Ordered {
+                        Some(start)
+                    } else {
+                        None
+                    });
                 self.ordered_counter_stack.push(start.saturating_sub(1));
+                self.list_tight_stack.push(list.tight);
                 self.list_depth += 1;
                 let body = self.render_children(node)?;
                 self.list_depth -= 1;
@@ -451,6 +497,7 @@ impl TypstRenderer {
                 self.list_stack.pop();
                 self.ordered_start_stack.pop();
                 self.ordered_counter_stack.pop();
+                self.list_tight_stack.pop();
 
                 // For ordered lists that start at a value other than 1, emit
                 // a scoped block with `set enum(start: N)` so Typst renders
@@ -459,8 +506,7 @@ impl TypstRenderer {
                 if is_ordered && start_at != 1 {
                     Ok(format!(
                         "#block[\n#set enum(start: {})\n{}]\n\n",
-                        start_at,
-                        body
+                        start_at, body
                     ))
                 } else {
                     Ok(format!("{}\n", body))
@@ -570,7 +616,8 @@ impl TypstRenderer {
             // Paired open tag → emit prefix, push suffix onto stack
             InlineTag::Open { name, attrs } => {
                 let (prefix, suffix) = inline_tag_to_typst(&name, &attrs);
-                self.html_inline_stack.push(InlineHtmlFrame { tag: name, suffix });
+                self.html_inline_stack
+                    .push(InlineHtmlFrame { tag: name, suffix });
                 prefix
             }
             // Close tag → pop matching frame, emit suffix
@@ -578,7 +625,9 @@ impl TypstRenderer {
                 if let Some(pos) = self.html_inline_stack.iter().rposition(|f| f.tag == name) {
                     let mut out = String::new();
                     let inner: Vec<_> = self.html_inline_stack.drain(pos + 1..).collect();
-                    for f in inner.into_iter().rev() { out.push_str(&f.suffix); }
+                    for f in inner.into_iter().rev() {
+                        out.push_str(&f.suffix);
+                    }
                     let frame = self.html_inline_stack.remove(pos);
                     out.push_str(&frame.suffix);
                     out
@@ -596,16 +645,17 @@ impl TypstRenderer {
         }
     }
 
-    fn render_list_item<'a>(&mut self, node: &'a AstNode<'a>, _list_type: ListType) -> Result<String> {
+    fn render_list_item<'a>(
+        &mut self,
+        node: &'a AstNode<'a>,
+        _list_type: ListType,
+    ) -> Result<String> {
         // Determine Typst marker based on list type.
         let is_ordered = matches!(self.list_stack.last().copied(), Some(ListType::Ordered));
         let marker = if is_ordered { "+ " } else { "- " };
-
         // Advance ordered counter if applicable.
-        if is_ordered {
-            if let Some(ctr) = self.ordered_counter_stack.last_mut() {
-                *ctr += 1;
-            }
+        if is_ordered && let Some(ctr) = self.ordered_counter_stack.last_mut() {
+            *ctr += 1;
         }
 
         // Indentation: 2 spaces per nesting level (0-based: depth 1 = top-level = no indent).
@@ -615,11 +665,23 @@ impl TypstRenderer {
             String::new()
         };
 
+        // Whether the enclosing list is loose (blank lines between items).
+        // Only the outermost (depth-1) list controls spacing; nested tight
+        // lists inside a loose parent do not get extra spacing.
+        let is_loose = self
+            .list_tight_stack
+            .last()
+            .copied()
+            .map(|tight| !tight)
+            .unwrap_or(false)
+            && self.list_depth == 1;
+        let spacing = if is_loose { "#v(0.5em)\n" } else { "" };
+
         // Collect children, distinguishing between the inline text (first paragraph)
         // and block children (nested lists, additional paragraphs).
         let children: Vec<_> = node.children().collect();
         if children.is_empty() {
-            return Ok(format!("{}{}\n", indent, marker));
+            return Ok(format!("{}{}\n{}", indent, marker, spacing));
         }
 
         // Render the first child — if it's a Paragraph, flatten it inline.
@@ -652,11 +714,24 @@ impl TypstRenderer {
         // Build output: marker + first text on first line, then any nested content.
         let first_trimmed = first_text.trim_end().to_string();
         if rest_parts.is_empty() {
-            Ok(format!("{}{}{}\n", indent, marker, first_trimmed.trim_start()))
+            Ok(format!(
+                "{}{}{}\n{}",
+                indent,
+                marker,
+                first_trimmed.trim_start(),
+                spacing,
+            ))
         } else {
             // Nested content: trim extra newlines so it reads cleanly.
             let nested = rest_parts.join("").trim_end().to_string();
-            Ok(format!("{}{}{}\n{}\n", indent, marker, first_trimmed.trim_start(), nested))
+            Ok(format!(
+                "{}{}{}\n{}\n{}",
+                indent,
+                marker,
+                first_trimmed.trim_start(),
+                nested,
+                spacing,
+            ))
         }
     }
 
@@ -706,10 +781,21 @@ impl TypstRenderer {
 
         let first_trimmed = first_text.trim_end().to_string();
         if rest_parts.is_empty() {
-            Ok(format!("{}- {} {}\n", indent, checkbox, first_trimmed.trim_start()))
+            Ok(format!(
+                "{}- {} {}\n",
+                indent,
+                checkbox,
+                first_trimmed.trim_start()
+            ))
         } else {
             let nested = rest_parts.join("").trim_end().to_string();
-            Ok(format!("{}- {} {}\n{}\n", indent, checkbox, first_trimmed.trim_start(), nested))
+            Ok(format!(
+                "{}- {} {}\n{}\n",
+                indent,
+                checkbox,
+                first_trimmed.trim_start(),
+                nested
+            ))
         }
     }
 
@@ -807,7 +893,9 @@ impl TypstRenderer {
         //   etag=<value>\nlast_modified=<value>\next=<ext>
         // so we can do conditional requests on re-runs.
         let meta_path = self.cache_dir.join(format!("remote-image-{}.meta", hashed));
-        let cached_ext = read_cache_meta(&meta_path).map(|m| m.ext).unwrap_or_default();
+        let cached_ext = read_cache_meta(&meta_path)
+            .map(|m| m.ext)
+            .unwrap_or_default();
 
         // If we already have a cached file with a real extension, use it.
         if !cached_ext.is_empty() {
@@ -923,7 +1011,10 @@ impl TypstRenderer {
 
         // Write metadata sidecar for future conditional requests.
         let meta_path = self.cache_dir.join(format!("remote-image-{}.meta", hashed));
-        let meta_content = format!("etag={}\nlast_modified={}\next={}\n", etag, last_modified, ext);
+        let meta_content = format!(
+            "etag={}\nlast_modified={}\next={}\n",
+            etag, last_modified, ext
+        );
         let _ = fs::write(&meta_path, meta_content);
 
         Ok(ImageInfo {
@@ -968,20 +1059,23 @@ impl TypstRenderer {
 
     fn render_table<'a>(&mut self, node: &'a AstNode<'a>, table: &NodeTable) -> Result<String> {
         // Build per-column alignment string from GFM alignment markers.
-        let alignments: Vec<&str> = table.alignments.iter().map(|a| match a {
-            TableAlignment::Left   => "left",
-            TableAlignment::Center => "center",
-            TableAlignment::Right  => "right",
-            TableAlignment::None   => "left", // default
-        }).collect();
+        let alignments: Vec<&str> = table
+            .alignments
+            .iter()
+            .map(|a| match a {
+                TableAlignment::Left => "left",
+                TableAlignment::Center => "center",
+                TableAlignment::Right => "right",
+                TableAlignment::None => "left", // default
+            })
+            .collect();
 
         // Collect rows; track which is the header.
         let mut rows: Vec<(bool, Vec<String>)> = Vec::new();
         for (row_idx, row) in node.children().enumerate() {
             let is_header = row_idx == 0;
             let mut cells = Vec::new();
-            let mut col_idx = 0usize;
-            for cell in row.children() {
+            for (col_idx, cell) in row.children().enumerate() {
                 let text = self.render_inline_children(cell)?;
                 let align = alignments.get(col_idx).copied().unwrap_or("left");
                 // Header cells: bold content; data cells: plain.
@@ -991,7 +1085,6 @@ impl TypstRenderer {
                     format!("table.cell(align: {})[{}]", align, text.trim())
                 };
                 cells.push(cell_content);
-                col_idx += 1;
             }
             if !cells.is_empty() {
                 rows.push((is_header, cells));
@@ -1007,7 +1100,10 @@ impl TypstRenderer {
         // Build a column-width spec: all equal fractional columns.
         let col_spec = format!(
             "({})",
-            (0..column_count).map(|_| "1fr").collect::<Vec<_>>().join(", ")
+            (0..column_count)
+                .map(|_| "1fr")
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         let flat: Vec<String> = rows.into_iter().flat_map(|(_, cells)| cells).collect();
@@ -1057,23 +1153,95 @@ impl TypstRenderer {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GitHub Alert renderer
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn render_alert(alert: &NodeAlert, body: &str) -> String {
+    let (title, accent) = match alert.alert_type {
+        AlertType::Note => (
+            alert.title.as_deref().unwrap_or("Note").to_string(),
+            "rgb(\"#0969da\")",
+        ),
+        AlertType::Tip => (
+            alert.title.as_deref().unwrap_or("Tip").to_string(),
+            "rgb(\"#1a7f37\")",
+        ),
+        AlertType::Important => (
+            alert.title.as_deref().unwrap_or("Important").to_string(),
+            "rgb(\"#8250df\")",
+        ),
+        AlertType::Warning => (
+            alert.title.as_deref().unwrap_or("Warning").to_string(),
+            "rgb(\"#9a6700\")",
+        ),
+        AlertType::Caution => (
+            alert.title.as_deref().unwrap_or("Caution").to_string(),
+            "rgb(\"#cf222e\")",
+        ),
+    };
+    let escaped_title = escape_typst_text(&title);
+    format!(
+        "#block(stroke: (left: 3pt + {accent}), inset: (left: 12pt, top: 8pt, bottom: 8pt, right: 8pt), width: 100%)[#text(fill: {accent})[#strong[{escaped_title}]]\\\n{body}]\n\n",
+        accent = accent,
+        escaped_title = escaped_title,
+        body = body.trim(),
+    )
+}
+
+/// Extract TOC entries by walking the comrak-parsed AST.
+///
+/// This replaces the old line-scanner approach and correctly handles:
+/// - Headings inside fenced code blocks (ignored by the AST, not picked up)
+/// - Inline markup in heading text (bold/italic/code/etc. — rendered as plain
+///   text so the TOC title is clean)
+/// - Setext-style headings (`===` / `---` underline syntax)
+/// - Edge cases like ATX headings with no trailing space, etc.
+///
+/// The `page_number` field is always 0 here; callers that need real page
+/// numbers must get them from Typst's outline at compile time.
 fn extract_toc(markdown: &str) -> Vec<TocEntry> {
-    markdown
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let hashes = trimmed.chars().take_while(|c| *c == '#').count();
-            if (1..=6).contains(&hashes) && trimmed.chars().nth(hashes) == Some(' ') {
-                Some(TocEntry {
-                    level: hashes as u8,
-                    title: trimmed[hashes + 1..].trim().to_string(),
-                    page_number: 0,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
+    let arena = Arena::new();
+    let root = parse_document(&arena, markdown, &markdown_options());
+    let mut entries = Vec::new();
+    collect_toc_entries(root, &mut entries);
+    entries
+}
+
+/// Recursively walk an AST node, collecting `TocEntry` values from every
+/// `Heading` node encountered in document order.
+fn collect_toc_entries<'a>(node: &'a AstNode<'a>, entries: &mut Vec<TocEntry>) {
+    for child in node.children() {
+        if let NodeValue::Heading(NodeHeading { level, .. }) = child.data.borrow().value {
+            let title = extract_plain_text(child);
+            entries.push(TocEntry {
+                level,
+                title: title.trim().to_string(),
+                page_number: 0,
+            });
+        } else {
+            collect_toc_entries(child, entries);
+        }
+    }
+}
+
+/// Recursively collect plain text from all descendant `Text`, `Code`,
+/// `SoftBreak`, `LineBreak`, and `Math` nodes — stripping any Typst or
+/// Markdown inline markup so the TOC title is readable as plain text.
+fn extract_plain_text<'a>(node: &'a AstNode<'a>) -> String {
+    let mut out = String::new();
+    for child in node.children() {
+        let val = child.data.borrow();
+        match &val.value {
+            NodeValue::Text(t) => out.push_str(t),
+            NodeValue::Code(c) => out.push_str(&c.literal),
+            NodeValue::SoftBreak | NodeValue::LineBreak => out.push(' '),
+            NodeValue::Math(m) => out.push_str(&m.literal),
+            NodeValue::HtmlInline(_) => {} // skip raw HTML fragments
+            _ => out.push_str(&extract_plain_text(child)),
+        }
+    }
+    out
 }
 
 /// Generate a Typst `#outline()` block for the TOC page.
@@ -1129,59 +1297,91 @@ fn latex_to_typst(latex: &str) -> String {
         match chars[i] {
             '\\' => {
                 i += 1;
-                if i >= chars.len() { out.push('\\'); continue; }
+                if i >= chars.len() {
+                    out.push('\\');
+                    continue;
+                }
                 match chars[i] {
                     // Line break inside matrices / aligned envs
-                    '\\' => { out.push_str("\\ "); i += 1; continue; }
+                    '\\' => {
+                        out.push_str("\\ ");
+                        i += 1;
+                        continue;
+                    }
                     // Spacing commands → single space
-                    ',' | ':' | ';' | '!' | ' ' => { out.push(' '); i += 1; continue; }
+                    ',' | ':' | ';' | '!' | ' ' => {
+                        out.push(' ');
+                        i += 1;
+                        continue;
+                    }
                     // Escaped braces → literal brace
-                    '{' => { out.push('{'); i += 1; continue; }
-                    '}' => { out.push('}'); i += 1; continue; }
+                    '{' => {
+                        out.push('{');
+                        i += 1;
+                        continue;
+                    }
+                    '}' => {
+                        out.push('}');
+                        i += 1;
+                        continue;
+                    }
                     _ => {}
                 }
                 // Collect alphabetic command name
                 let cmd_start = i;
-                while i < chars.len() && chars[i].is_ascii_alphabetic() { i += 1; }
+                while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
                 let cmd: String = chars[cmd_start..i].iter().collect();
                 // Skip optional trailing space after command name
-                if i < chars.len() && chars[i] == ' ' && !cmd.is_empty() { i += 1; }
+                if i < chars.len() && chars[i] == ' ' && !cmd.is_empty() {
+                    i += 1;
+                }
 
                 // Insert a leading space if the output buffer ends with an
                 // identifier char and the translated command will start with one
                 // — prevents merging like `i` + `pi` → `ipi`.
-                let prev_is_ident = out.chars().last()
+                let prev_is_ident = out
+                    .chars()
+                    .last()
                     .map(|c| c.is_alphanumeric() || c == '\'')
                     .unwrap_or(false);
 
                 let translated = math_cmd(&cmd, &chars, &mut i);
 
-                if prev_is_ident {
-                    if let Some(first) = translated.chars().next() {
-                        if first.is_alphanumeric() || first == '"' {
-                            out.push(' ');
-                        }
-                    }
+                if prev_is_ident
+                    && let Some(first) = translated.chars().next()
+                    && (first.is_alphanumeric() || first == '"')
+                {
+                    out.push(' ');
                 }
                 out.push_str(&translated);
 
                 // Insert a trailing space when the translation ends with an
                 // identifier char and the next input char is also alphanumeric
                 // — prevents e.g. `gt.eq0` instead of `gt.eq 0`.
-                if let (Some(last), Some(&next)) = (translated.chars().last(), chars.get(i)) {
-                    if (last.is_alphanumeric() || last == '.')
-                        && (next.is_alphanumeric() || next == '_')
-                    {
-                        out.push(' ');
-                    }
+                if let (Some(last), Some(&next)) = (translated.chars().last(), chars.get(i))
+                    && (last.is_alphanumeric() || last == '.')
+                    && (next.is_alphanumeric() || next == '_')
+                {
+                    out.push(' ');
                 }
             }
             // Braces pass through as Typst grouping.
             // `math_cmd`'s `consume` helper already consumed the braces that
             // belonged to function arguments.
-            '{' => { out.push('{'); i += 1; }
-            '}' => { out.push('}'); i += 1; }
-            c   => { out.push(c);  i += 1; }
+            '{' => {
+                out.push('{');
+                i += 1;
+            }
+            '}' => {
+                out.push('}');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
         }
     }
     out
@@ -1192,54 +1392,83 @@ fn latex_to_typst(latex: &str) -> String {
 fn math_cmd(cmd: &str, chars: &[char], i: &mut usize) -> String {
     // Consume one brace-group {…} or single token, returning it translated.
     let consume = |chars: &[char], i: &mut usize| -> String {
-        while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
-        if *i >= chars.len() { return String::new(); }
+        while *i < chars.len() && chars[*i] == ' ' {
+            *i += 1;
+        }
+        if *i >= chars.len() {
+            return String::new();
+        }
         if chars[*i] == '{' {
             *i += 1;
             let mut depth = 1usize;
             let mut inner = String::new();
             while *i < chars.len() {
                 match chars[*i] {
-                    '{' => { depth += 1; inner.push('{'); *i += 1; }
+                    '{' => {
+                        depth += 1;
+                        inner.push('{');
+                        *i += 1;
+                    }
                     '}' => {
                         depth -= 1;
-                        if depth == 0 { *i += 1; break; }
-                        inner.push('}'); *i += 1;
+                        if depth == 0 {
+                            *i += 1;
+                            break;
+                        }
+                        inner.push('}');
+                        *i += 1;
                     }
-                    c => { inner.push(c); *i += 1; }
+                    c => {
+                        inner.push(c);
+                        *i += 1;
+                    }
                 }
             }
             latex_to_typst(&inner)
         } else {
-            let c = chars[*i]; *i += 1;
+            let c = chars[*i];
+            *i += 1;
             if c == '\\' {
                 let start = *i;
-                while *i < chars.len() && chars[*i].is_ascii_alphabetic() { *i += 1; }
+                while *i < chars.len() && chars[*i].is_ascii_alphabetic() {
+                    *i += 1;
+                }
                 let sub: String = chars[start..*i].iter().collect();
                 math_cmd(&sub, chars, i)
-            } else { c.to_string() }
+            } else {
+                c.to_string()
+            }
         }
     };
 
     match cmd {
         // ── fractions ─────────────────────────────────────────────────
-        "frac"|"dfrac"|"tfrac"|"cfrac" => {
-            let n = consume(chars, i); let d = consume(chars, i);
+        "frac" | "dfrac" | "tfrac" | "cfrac" => {
+            let n = consume(chars, i);
+            let d = consume(chars, i);
             format!("frac({}, {})", n, d)
         }
         "binom" => {
-            let n = consume(chars, i); let k = consume(chars, i);
+            let n = consume(chars, i);
+            let k = consume(chars, i);
             format!("binom({}, {})", n, k)
         }
 
         // ── roots ─────────────────────────────────────────────────────
         "sqrt" => {
-            while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
+            while *i < chars.len() && chars[*i] == ' ' {
+                *i += 1;
+            }
             if *i < chars.len() && chars[*i] == '[' {
                 *i += 1;
                 let mut n = String::new();
-                while *i < chars.len() && chars[*i] != ']' { n.push(chars[*i]); *i += 1; }
-                if *i < chars.len() { *i += 1; }
+                while *i < chars.len() && chars[*i] != ']' {
+                    n.push(chars[*i]);
+                    *i += 1;
+                }
+                if *i < chars.len() {
+                    *i += 1;
+                }
                 format!("root({}, {})", latex_to_typst(&n), consume(chars, i))
             } else {
                 format!("sqrt({})", consume(chars, i))
@@ -1247,12 +1476,11 @@ fn math_cmd(cmd: &str, chars: &[char], i: &mut usize) -> String {
         }
 
         // ── text in math ──────────────────────────────────────────────
-        "text"|"mathrm"|"mathit"|"mathsf"|"mathtt"|"operatorname" =>
-            format!("\"{}\"", consume(chars, i).replace('"', "\\\"")),
-        "mathbf"|"textbf"|"boldsymbol"|"bm" =>
-            format!("bold({})", consume(chars, i)),
-        "textrm"|"textnormal" =>
-            format!("\"{}\"", consume(chars, i).replace('"', "\\\"")),
+        "text" | "mathrm" | "mathit" | "mathsf" | "mathtt" | "operatorname" => {
+            format!("\"{}\"", consume(chars, i).replace('"', "\\\""))
+        }
+        "mathbf" | "textbf" | "boldsymbol" | "bm" => format!("bold({})", consume(chars, i)),
+        "textrm" | "textnormal" => format!("\"{}\"", consume(chars, i).replace('"', "\\\"")),
         // Blackboard bold: \mathbb{R} → RR, \mathbb{Z} → ZZ, etc.
         "mathbb" => {
             let inner = consume(chars, i);
@@ -1268,111 +1496,219 @@ fn math_cmd(cmd: &str, chars: &[char], i: &mut usize) -> String {
         }
 
         // ── accents ───────────────────────────────────────────────────
-        "hat"|"widehat"        => format!("hat({})",         consume(chars, i)),
-        "tilde"|"widetilde"    => format!("tilde({})",       consume(chars, i)),
-        "bar"|"overline"       => format!("overline({})",    consume(chars, i)),
-        "underline"            => format!("underline({})",   consume(chars, i)),
-        "vec"                  => format!("arrow({})",       consume(chars, i)),
-        "dot"                  => format!("dot({})",         consume(chars, i)),
-        "ddot"                 => format!("dot.double({})",  consume(chars, i)),
-        "underbrace"           => format!("underbrace({})",  consume(chars, i)),
-        "overbrace"            => format!("overbrace({})",   consume(chars, i)),
+        "hat" | "widehat" => format!("hat({})", consume(chars, i)),
+        "tilde" | "widetilde" => format!("tilde({})", consume(chars, i)),
+        "bar" | "overline" => format!("overline({})", consume(chars, i)),
+        "underline" => format!("underline({})", consume(chars, i)),
+        "vec" => format!("arrow({})", consume(chars, i)),
+        "dot" => format!("dot({})", consume(chars, i)),
+        "ddot" => format!("dot.double({})", consume(chars, i)),
+        "underbrace" => format!("underbrace({})", consume(chars, i)),
+        "overbrace" => format!("overbrace({})", consume(chars, i)),
 
         // ── trig / log functions ──────────────────────────────────────
-        "sin"=>"sin".into(), "cos"=>"cos".into(), "tan"=>"tan".into(),
-        "sec"=>"sec".into(), "csc"=>"csc".into(), "cot"=>"cot".into(),
-        "arcsin"=>"arcsin".into(), "arccos"=>"arccos".into(), "arctan"=>"arctan".into(),
-        "sinh"=>"sinh".into(), "cosh"=>"cosh".into(), "tanh"=>"tanh".into(),
-        "ln"=>"ln".into(), "log"=>"log".into(), "exp"=>"exp".into(),
-        "lim"=>"lim".into(), "limsup"=>"limsup".into(), "liminf"=>"liminf".into(),
-        "sup"=>"sup".into(), "inf"=>"inf".into(),
-        "max"=>"max".into(), "min"=>"min".into(),
-        "arg"=>"arg".into(), "det"=>"det".into(), "dim"=>"dim".into(),
-        "gcd"=>"gcd".into(), "hom"=>"hom".into(), "ker"=>"ker".into(),
+        "sin" => "sin".into(),
+        "cos" => "cos".into(),
+        "tan" => "tan".into(),
+        "sec" => "sec".into(),
+        "csc" => "csc".into(),
+        "cot" => "cot".into(),
+        "arcsin" => "arcsin".into(),
+        "arccos" => "arccos".into(),
+        "arctan" => "arctan".into(),
+        "sinh" => "sinh".into(),
+        "cosh" => "cosh".into(),
+        "tanh" => "tanh".into(),
+        "ln" => "ln".into(),
+        "log" => "log".into(),
+        "exp" => "exp".into(),
+        "lim" => "lim".into(),
+        "limsup" => "limsup".into(),
+        "liminf" => "liminf".into(),
+        "sup" => "sup".into(),
+        "inf" => "inf".into(),
+        "max" => "max".into(),
+        "min" => "min".into(),
+        "arg" => "arg".into(),
+        "det" => "det".into(),
+        "dim" => "dim".into(),
+        "gcd" => "gcd".into(),
+        "hom" => "hom".into(),
+        "ker" => "ker".into(),
 
         // ── sums / integrals ──────────────────────────────────────────
-        "sum"=>"sum".into(), "prod"=>"prod".into(),
-        "int"=>"integral".into(), "iint"=>"integral.double".into(),
-        "iiint"=>"integral.triple".into(), "oint"=>"integral.cont".into(),
-        "bigcup"=>"union.big".into(), "bigcap"=>"sect.big".into(),
+        "sum" => "sum".into(),
+        "prod" => "prod".into(),
+        "int" => "integral".into(),
+        "iint" => "integral.double".into(),
+        "iiint" => "integral.triple".into(),
+        "oint" => "integral.cont".into(),
+        "bigcup" => "union.big".into(),
+        "bigcap" => "sect.big".into(),
 
         // ── Greek (lowercase) ─────────────────────────────────────────
-        "alpha"=>"alpha".into(), "beta"=>"beta".into(), "gamma"=>"gamma".into(),
-        "delta"=>"delta".into(), "epsilon"=>"epsilon".into(),
-        "varepsilon"=>"epsilon.alt".into(), "zeta"=>"zeta".into(),
-        "eta"=>"eta".into(), "theta"=>"theta".into(), "vartheta"=>"theta.alt".into(),
-        "iota"=>"iota".into(), "kappa"=>"kappa".into(), "lambda"=>"lambda".into(),
-        "mu"=>"mu".into(), "nu"=>"nu".into(), "xi"=>"xi".into(),
-        "pi"=>"pi".into(), "varpi"=>"pi.alt".into(),
-        "rho"=>"rho".into(), "varrho"=>"rho.alt".into(),
-        "sigma"=>"sigma".into(), "varsigma"=>"sigma.alt".into(),
-        "tau"=>"tau".into(), "upsilon"=>"upsilon".into(),
-        "phi"=>"phi.alt".into(), "varphi"=>"phi".into(),
-        "chi"=>"chi".into(), "psi"=>"psi".into(), "omega"=>"omega".into(),
+        "alpha" => "alpha".into(),
+        "beta" => "beta".into(),
+        "gamma" => "gamma".into(),
+        "delta" => "delta".into(),
+        "epsilon" => "epsilon".into(),
+        "varepsilon" => "epsilon.alt".into(),
+        "zeta" => "zeta".into(),
+        "eta" => "eta".into(),
+        "theta" => "theta".into(),
+        "vartheta" => "theta.alt".into(),
+        "iota" => "iota".into(),
+        "kappa" => "kappa".into(),
+        "lambda" => "lambda".into(),
+        "mu" => "mu".into(),
+        "nu" => "nu".into(),
+        "xi" => "xi".into(),
+        "pi" => "pi".into(),
+        "varpi" => "pi.alt".into(),
+        "rho" => "rho".into(),
+        "varrho" => "rho.alt".into(),
+        "sigma" => "sigma".into(),
+        "varsigma" => "sigma.alt".into(),
+        "tau" => "tau".into(),
+        "upsilon" => "upsilon".into(),
+        "phi" => "phi.alt".into(),
+        "varphi" => "phi".into(),
+        "chi" => "chi".into(),
+        "psi" => "psi".into(),
+        "omega" => "omega".into(),
         // Greek (uppercase)
-        "Gamma"=>"Gamma".into(), "Delta"=>"Delta".into(), "Theta"=>"Theta".into(),
-        "Lambda"=>"Lambda".into(), "Xi"=>"Xi".into(), "Pi"=>"Pi".into(),
-        "Sigma"=>"Sigma".into(), "Upsilon"=>"Upsilon".into(),
-        "Phi"=>"Phi".into(), "Psi"=>"Psi".into(), "Omega"=>"Omega".into(),
+        "Gamma" => "Gamma".into(),
+        "Delta" => "Delta".into(),
+        "Theta" => "Theta".into(),
+        "Lambda" => "Lambda".into(),
+        "Xi" => "Xi".into(),
+        "Pi" => "Pi".into(),
+        "Sigma" => "Sigma".into(),
+        "Upsilon" => "Upsilon".into(),
+        "Phi" => "Phi".into(),
+        "Psi" => "Psi".into(),
+        "Omega" => "Omega".into(),
 
         // ── binary operators / relations ──────────────────────────────
-        "cdot"=>"dot.c".into(), "cdots"=>"dots.c".into(),
-        "ldots"|"dots"=>"dots".into(), "vdots"=>"dots.v".into(), "ddots"=>"dots.down".into(),
-        "times"=>"times".into(), "div"=>"div".into(),
-        "pm"=>"plus.minus".into(), "mp"=>"minus.plus".into(),
-        "leq"|"le"=>"lt.eq".into(), "geq"|"ge"=>"gt.eq".into(),
-        "neq"|"ne"=>"eq.not".into(), "approx"=>"approx".into(),
-        "sim"=>"tilde.op".into(), "simeq"=>"tilde.eq".into(),
-        "cong"=>"tilde.equiv".into(), "equiv"=>"equiv".into(),
-        "propto"=>"prop".into(), "ll"=>"lt.double".into(), "gg"=>"gt.double".into(),
-        "in"=>"in".into(), "notin"=>"in.not".into(),
-        "subset"=>"subset".into(), "subseteq"=>"subset.eq".into(),
-        "supset"=>"supset".into(), "supseteq"=>"supset.eq".into(),
-        "cup"=>"union".into(), "cap"=>"sect".into(),
-        "setminus"=>"without".into(), "emptyset"|"varnothing"=>"nothing".into(),
-        "forall"=>"forall".into(), "exists"=>"exists".into(), "nexists"=>"exists.not".into(),
-        "neg"|"lnot"=>"not".into(), "land"|"wedge"=>"and".into(), "lor"|"vee"=>"or".into(),
-        "oplus"=>"plus.circle".into(), "otimes"=>"times.circle".into(),
-        "circ"=>"circle.small".into(), "bullet"=>"bullet".into(),
+        "cdot" => "dot.c".into(),
+        "cdots" => "dots.c".into(),
+        "ldots" | "dots" => "dots".into(),
+        "vdots" => "dots.v".into(),
+        "ddots" => "dots.down".into(),
+        "times" => "times".into(),
+        "div" => "div".into(),
+        "pm" => "plus.minus".into(),
+        "mp" => "minus.plus".into(),
+        "leq" | "le" => "lt.eq".into(),
+        "geq" | "ge" => "gt.eq".into(),
+        "neq" | "ne" => "eq.not".into(),
+        "approx" => "approx".into(),
+        "sim" => "tilde.op".into(),
+        "simeq" => "tilde.eq".into(),
+        "cong" => "tilde.equiv".into(),
+        "equiv" => "equiv".into(),
+        "propto" => "prop".into(),
+        "ll" => "lt.double".into(),
+        "gg" => "gt.double".into(),
+        "in" => "in".into(),
+        "notin" => "in.not".into(),
+        "subset" => "subset".into(),
+        "subseteq" => "subset.eq".into(),
+        "supset" => "supset".into(),
+        "supseteq" => "supset.eq".into(),
+        "cup" => "union".into(),
+        "cap" => "sect".into(),
+        "setminus" => "without".into(),
+        "emptyset" | "varnothing" => "nothing".into(),
+        "forall" => "forall".into(),
+        "exists" => "exists".into(),
+        "nexists" => "exists.not".into(),
+        "neg" | "lnot" => "not".into(),
+        "land" | "wedge" => "and".into(),
+        "lor" | "vee" => "or".into(),
+        "oplus" => "plus.circle".into(),
+        "otimes" => "times.circle".into(),
+        "circ" => "circle.small".into(),
+        "bullet" => "bullet".into(),
 
         // ── arrows ────────────────────────────────────────────────────
-        "to"|"rightarrow"=>"->".into(), "leftarrow"=>"<-".into(),
-        "Rightarrow"=>"=>".into(), "Leftarrow"=>"<=".into(),
-        "leftrightarrow"=>"<->".into(), "Leftrightarrow"=>"<=>".into(),
-        "mapsto"=>"|->".into(), "uparrow"=>"arrow.t".into(), "downarrow"=>"arrow.b".into(),
-        "updownarrow"=>"arrow.t.b".into(),
-        "longrightarrow"=>"-->".into(), "longleftarrow"=>"<--".into(),
+        "to" | "rightarrow" => "->".into(),
+        "leftarrow" => "<-".into(),
+        "Rightarrow" => "=>".into(),
+        "Leftarrow" => "<=".into(),
+        "leftrightarrow" => "<->".into(),
+        "Leftrightarrow" => "<=>".into(),
+        "mapsto" => "|->".into(),
+        "uparrow" => "arrow.t".into(),
+        "downarrow" => "arrow.b".into(),
+        "updownarrow" => "arrow.t.b".into(),
+        "longrightarrow" => "-->".into(),
+        "longleftarrow" => "<--".into(),
 
         // ── misc symbols ──────────────────────────────────────────────
-        "partial"=>"diff".into(), "nabla"=>"nabla".into(), "infty"=>"oo".into(),
-        "hbar"=>"planck.reduce".into(), "ell"=>"ell".into(),
-        "Re"=>"Re".into(), "Im"=>"Im".into(), "aleph"=>"aleph".into(),
-        "prime"=>"'".into(), "dagger"=>"dagger".into(), "ddagger"=>"dagger.double".into(),
-        "star"=>"star".into(), "ast"=>"ast".into(),
+        "partial" => "diff".into(),
+        "nabla" => "nabla".into(),
+        "infty" => "oo".into(),
+        "hbar" => "planck.reduce".into(),
+        "ell" => "ell".into(),
+        "Re" => "Re".into(),
+        "Im" => "Im".into(),
+        "aleph" => "aleph".into(),
+        "prime" => "'".into(),
+        "dagger" => "dagger".into(),
+        "ddagger" => "dagger.double".into(),
+        "star" => "star".into(),
+        "ast" => "ast".into(),
 
         // ── delimiters (auto-sized in Typst) ──────────────────────────
-        "left"|"right" => {
-            while *i < chars.len() && chars[*i] == ' ' { *i += 1; }
+        "left" | "right" => {
+            while *i < chars.len() && chars[*i] == ' ' {
+                *i += 1;
+            }
             if *i < chars.len() {
-                let d = chars[*i]; *i += 1;
-                if d == '.' { String::new() } else { d.to_string() }
-            } else { String::new() }
+                let d = chars[*i];
+                *i += 1;
+                if d == '.' {
+                    String::new()
+                } else {
+                    d.to_string()
+                }
+            } else {
+                String::new()
+            }
         }
-        "langle"=>"angle.l".into(), "rangle"=>"angle.r".into(),
-        "lfloor"=>"floor.l".into(), "rfloor"=>"floor.r".into(),
-        "lceil"=>"ceil.l".into(),   "rceil"=>"ceil.r".into(),
-        "lVert"|"rVert"=>"||".into(), "lvert"|"rvert"=>"|".into(),
+        "langle" => "angle.l".into(),
+        "rangle" => "angle.r".into(),
+        "lfloor" => "floor.l".into(),
+        "rfloor" => "floor.r".into(),
+        "lceil" => "ceil.l".into(),
+        "rceil" => "ceil.r".into(),
+        "lVert" | "rVert" => "||".into(),
+        "lvert" | "rvert" => "|".into(),
 
         // ── environments ──────────────────────────────────────────────
-        "begin" => { let env = consume(chars, i); math_env(&env, chars, i) }
-        "end"   => { consume(chars, i); String::new() }
+        "begin" => {
+            let env = consume(chars, i);
+            math_env(&env, chars, i)
+        }
+        "end" => {
+            consume(chars, i);
+            String::new()
+        }
 
         // ── layout / spacing ──────────────────────────────────────────
-        "quad"=>"quad".into(), "qquad"=>"wide".into(),
-        "hspace"|"vspace" => { consume(chars, i); " ".into() }
-        "displaystyle"|"textstyle"|"scriptstyle"|"scriptscriptstyle" => String::new(),
-        "limits"|"nolimits"|"nonumber"|"notag" => String::new(),
-        "label"|"tag" => { consume(chars, i); String::new() }
+        "quad" => "quad".into(),
+        "qquad" => "wide".into(),
+        "hspace" | "vspace" => {
+            consume(chars, i);
+            " ".into()
+        }
+        "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" => String::new(),
+        "limits" | "nolimits" | "nonumber" | "notag" => String::new(),
+        "label" | "tag" => {
+            consume(chars, i);
+            String::new()
+        }
 
         // ── unknown: pass through so it fails visibly ──────────────────
         other => format!("\\{}", other),
@@ -1382,7 +1718,7 @@ fn math_cmd(cmd: &str, chars: &[char], i: &mut usize) -> String {
 /// Handle `\begin{env}...\end{env}` environments.
 fn math_env(env: &str, chars: &[char], i: &mut usize) -> String {
     let begin_m = format!("\\begin{{{}}}", env);
-    let end_m   = format!("\\end{{{}}}", env);
+    let end_m = format!("\\end{{{}}}", env);
     let remaining: String = chars[*i..].iter().collect();
     let mut inner = String::new();
     let mut depth = 1usize;
@@ -1395,7 +1731,10 @@ fn math_env(env: &str, chars: &[char], i: &mut usize) -> String {
             j += begin_m.len();
         } else if remaining[j..].starts_with(end_m.as_str()) {
             depth -= 1;
-            if depth == 0 { j += end_m.len(); break; }
+            if depth == 0 {
+                j += end_m.len();
+                break;
+            }
             inner.push_str(&end_m);
             j += end_m.len();
         } else {
@@ -1407,20 +1746,19 @@ fn math_env(env: &str, chars: &[char], i: &mut usize) -> String {
     *i += remaining[..j].chars().count();
 
     match env {
-        "matrix"  => format!("mat(delim: #none, {})", math_matrix_body(&inner)),
-        "pmatrix" => format!("mat({})",                math_matrix_body(&inner)),
-        "bmatrix" => format!("mat(delim: \"[\", {})",  math_matrix_body(&inner)),
+        "matrix" => format!("mat(delim: #none, {})", math_matrix_body(&inner)),
+        "pmatrix" => format!("mat({})", math_matrix_body(&inner)),
+        "bmatrix" => format!("mat(delim: \"[\", {})", math_matrix_body(&inner)),
         "Bmatrix" => format!("mat(delim: \"{{\", {})", math_matrix_body(&inner)),
-        "vmatrix" => format!("mat(delim: \"|\", {})",  math_matrix_body(&inner)),
+        "vmatrix" => format!("mat(delim: \"|\", {})", math_matrix_body(&inner)),
         "Vmatrix" => format!("mat(delim: \"||\", {})", math_matrix_body(&inner)),
-        "cases"   => math_cases(&inner),
-        "align"|"align*"|"aligned" => {
-            inner.split("\\\\")
-                 .map(|r| latex_to_typst(r.trim()))
-                 .collect::<Vec<_>>()
-                 .join(" \\ ")
-        }
-        "equation"|"equation*" => latex_to_typst(inner.trim()),
+        "cases" => math_cases(&inner),
+        "align" | "align*" | "aligned" => inner
+            .split("\\\\")
+            .map(|r| latex_to_typst(r.trim()))
+            .collect::<Vec<_>>()
+            .join(" \\ "),
+        "equation" | "equation*" => latex_to_typst(inner.trim()),
         _ => latex_to_typst(inner.trim()),
     }
 }
@@ -1429,7 +1767,8 @@ fn math_env(env: &str, chars: &[char], i: &mut usize) -> String {
 /// LaTeX: `expr & \text{if} cond \\` rows
 /// Typst: `cases(expr &"if" cond, ...)`
 fn math_cases(inner: &str) -> String {
-    let rows: Vec<String> = inner.split("\\\\")
+    let rows: Vec<String> = inner
+        .split("\\\\")
         .filter(|r| !r.trim().is_empty())
         .map(|row| {
             let parts: Vec<&str> = row.splitn(2, '&').collect();
@@ -1455,9 +1794,17 @@ fn math_cases(inner: &str) -> String {
 /// so the surrounding `"if"` keyword in Typst doesn't duplicate it.
 fn strip_text_if(s: &str) -> &str {
     let s = s.trim();
-    for p in &[r"\text{if }", r"\text{if}", r"\text{ if }", r"\text{ if}",
-               r"\text{otherwise}", r"\text{else}"] {
-        if s.starts_with(p) { return &s[p.len()..]; }
+    for p in &[
+        r"\text{if }",
+        r"\text{if}",
+        r"\text{ if }",
+        r"\text{ if}",
+        r"\text{otherwise}",
+        r"\text{else}",
+    ] {
+        if let Some(stripped) = s.strip_prefix(p) {
+            return stripped;
+        }
     }
     s
 }
@@ -1469,9 +1816,9 @@ fn math_matrix_body(body: &str) -> String {
         .filter(|r| !r.trim().is_empty())
         .map(|row| {
             row.split('&')
-               .map(|c| latex_to_typst(c.trim()))
-               .collect::<Vec<_>>()
-               .join(", ")
+                .map(|c| latex_to_typst(c.trim()))
+                .collect::<Vec<_>>()
+                .join(", ")
         })
         .collect::<Vec<_>>()
         .join("; ")
@@ -1503,7 +1850,13 @@ fn heading_label(title: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    if slug.is_empty() || slug.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if slug.is_empty()
+        || slug
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+    {
         format!("h-{}", slug)
     } else {
         slug
@@ -1556,11 +1909,26 @@ fn typst_quoted_string(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Compute a stable, deterministic hex name for a string.
+///
+/// Uses FNV-1a (64-bit) — a public-domain, non-cryptographic hash that
+/// produces the **same output across every Rust version, platform, and
+/// process invocation**.  This is intentionally different from
+/// `std::collections::hash_map::DefaultHasher`, whose output is explicitly
+/// *not* guaranteed to be stable across compilations or runs.
+///
+/// The hex digest is used as the filename stem for cached remote-image files,
+/// so stability is essential: the same URL must always map to the same path.
 fn stable_name(s: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    // FNV-1a 64-bit parameters (public domain).
+    const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
+    const FNV_PRIME: u64 = 1_099_511_628_211;
+    let mut hash = FNV_OFFSET;
+    for byte in s.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{:016x}", hash)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1617,7 +1985,11 @@ fn read_cache_meta(path: &Path) -> Option<CacheMeta> {
             meta.ext = v.to_string();
         }
     }
-    if meta.ext.is_empty() { None } else { Some(meta) }
+    if meta.ext.is_empty() {
+        None
+    } else {
+        Some(meta)
+    }
 }
 
 /// Determine the image format (file extension) using:
@@ -1626,7 +1998,12 @@ fn read_cache_meta(path: &Path) -> Option<CacheMeta> {
 /// 3. URL path extension as last resort.
 pub fn detect_image_format(url: &str, content_type: &str, bytes: &[u8]) -> &'static str {
     // 1. Content-Type header
-    let ct = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     if let Some(ext) = mime_to_ext(&ct) {
         return ext;
     }
@@ -1643,14 +2020,14 @@ pub fn detect_image_format(url: &str, content_type: &str, bytes: &[u8]) -> &'sta
 /// Map a MIME type to a file extension.
 pub fn mime_to_ext(mime: &str) -> Option<&'static str> {
     match mime {
-        "image/png"                      => Some("png"),
-        "image/jpeg" | "image/jpg"       => Some("jpg"),
-        "image/gif"                      => Some("gif"),
-        "image/webp"                     => Some("webp"),
-        "image/svg+xml" | "image/svg"    => Some("svg"),
-        "image/bmp"                      => Some("bmp"),
-        "image/tiff"                     => Some("tiff"),
-        "image/avif"                     => Some("avif"),
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/svg+xml" | "image/svg" => Some("svg"),
+        "image/bmp" => Some("bmp"),
+        "image/tiff" => Some("tiff"),
+        "image/avif" => Some("avif"),
         "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
         _ => None,
     }
@@ -1695,7 +2072,11 @@ pub fn sniff_image_magic(bytes: &[u8]) -> Option<&'static str> {
 /// Heuristic: check if the byte slice looks like an SVG document.
 pub fn is_svg_bytes(bytes: &[u8]) -> bool {
     // Skip BOM if present
-    let start = if bytes.starts_with(b"\xef\xbb\xbf") { 3 } else { 0 };
+    let start = if bytes.starts_with(b"\xef\xbb\xbf") {
+        3
+    } else {
+        0
+    };
     let snippet = &bytes[start..bytes.len().min(start + 512)];
     if let Ok(s) = std::str::from_utf8(snippet) {
         let trimmed = s.trim_start();
@@ -1728,18 +2109,27 @@ fn guess_extension_from_url(url: &str) -> &'static str {
     let path = path.split('#').next().unwrap_or(path);
     let lower = path.to_ascii_lowercase();
 
-    if lower.ends_with(".png")              { "png"  }
-    else if lower.ends_with(".jpg")
-         || lower.ends_with(".jpeg")        { "jpg"  }
-    else if lower.ends_with(".gif")         { "gif"  }
-    else if lower.ends_with(".webp")        { "webp" }
-    else if lower.ends_with(".svg")         { "svg"  }
-    else if lower.ends_with(".bmp")         { "bmp"  }
-    else if lower.ends_with(".tiff")
-         || lower.ends_with(".tif")         { "tiff" }
-    else if lower.ends_with(".avif")        { "avif" }
-    else if lower.ends_with(".ico")         { "ico"  }
-    else                                    { "img"  }
+    if lower.ends_with(".png") {
+        "png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "jpg"
+    } else if lower.ends_with(".gif") {
+        "gif"
+    } else if lower.ends_with(".webp") {
+        "webp"
+    } else if lower.ends_with(".svg") {
+        "svg"
+    } else if lower.ends_with(".bmp") {
+        "bmp"
+    } else if lower.ends_with(".tiff") || lower.ends_with(".tif") {
+        "tiff"
+    } else if lower.ends_with(".avif") {
+        "avif"
+    } else if lower.ends_with(".ico") {
+        "ico"
+    } else {
+        "img"
+    }
 }
 
 /// Emit a Typst `#figure(image(…))` block for a resolved image.
@@ -1793,15 +2183,15 @@ pub fn format_image_typst_sized(info: &ImageInfo, alt: &str, hint: &SizeHint) ->
 pub fn missing_image_fallback(url: &str, alt: &str) -> String {
     // Always include the filename so diagnostics are easy — even when alt text is set.
     let short_url = {
-        let s = url
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .last()
-            .unwrap_or(url);
+        let s = url.split('/').rfind(|s| !s.is_empty()).unwrap_or(url);
         s.split('?').next().unwrap_or(s)
     };
     let label = if !alt.is_empty() {
-        format!("{} ({})", escape_typst_text(alt), escape_typst_text(short_url))
+        format!(
+            "{} ({})",
+            escape_typst_text(alt),
+            escape_typst_text(short_url)
+        )
     } else {
         escape_typst_text(short_url)
     };
@@ -1877,14 +2267,34 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
     let mut i = 0;
     while i + 3 < bytes.len() {
-        let b0 = if bytes[i] == b'=' { 0 } else { table[bytes[i] as usize] };
-        let b1 = if bytes[i+1] == b'=' { 0 } else { table[bytes[i+1] as usize] };
-        let b2 = if bytes[i+2] == b'=' { 0 } else { table[bytes[i+2] as usize] };
-        let b3 = if bytes[i+3] == b'=' { 0 } else { table[bytes[i+3] as usize] };
+        let b0 = if bytes[i] == b'=' {
+            0
+        } else {
+            table[bytes[i] as usize]
+        };
+        let b1 = if bytes[i + 1] == b'=' {
+            0
+        } else {
+            table[bytes[i + 1] as usize]
+        };
+        let b2 = if bytes[i + 2] == b'=' {
+            0
+        } else {
+            table[bytes[i + 2] as usize]
+        };
+        let b3 = if bytes[i + 3] == b'=' {
+            0
+        } else {
+            table[bytes[i + 3] as usize]
+        };
         let v = ((b0 as u32) << 18) | ((b1 as u32) << 12) | ((b2 as u32) << 6) | (b3 as u32);
         out.push((v >> 16) as u8);
-        if bytes[i+2] != b'=' { out.push(((v >> 8) & 0xff) as u8); }
-        if bytes[i+3] != b'=' { out.push((v & 0xff) as u8); }
+        if bytes[i + 2] != b'=' {
+            out.push(((v >> 8) & 0xff) as u8);
+        }
+        if bytes[i + 3] != b'=' {
+            out.push((v & 0xff) as u8);
+        }
         i += 4;
     }
     Ok(out)
@@ -1899,15 +2309,16 @@ fn percent_decode(s: &str) -> std::borrow::Cow<'_, str> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                (bytes[i+1] as char).to_digit(16),
-                (bytes[i+2] as char).to_digit(16),
-            ) {
-                out.push(((hi << 4) | lo) as u8);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push(((hi << 4) | lo) as u8);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -2012,32 +2423,47 @@ mod image_tests {
     #[test]
     fn detect_format_content_type_png() {
         let bytes = b"\x89PNG\r\n\x1a\n";
-        assert_eq!(detect_image_format("https://example.com/img", "image/png", bytes), "png");
+        assert_eq!(
+            detect_image_format("https://example.com/img", "image/png", bytes),
+            "png"
+        );
     }
 
     #[test]
     fn detect_format_content_type_jpeg() {
         let bytes = b"\xff\xd8\xff\xe0";
-        assert_eq!(detect_image_format("https://example.com/img", "image/jpeg", bytes), "jpg");
+        assert_eq!(
+            detect_image_format("https://example.com/img", "image/jpeg", bytes),
+            "jpg"
+        );
     }
 
     #[test]
     fn detect_format_content_type_svg() {
         let bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
-        assert_eq!(detect_image_format("https://example.com/img", "image/svg+xml", bytes), "svg");
+        assert_eq!(
+            detect_image_format("https://example.com/img", "image/svg+xml", bytes),
+            "svg"
+        );
     }
 
     #[test]
     fn detect_format_content_type_webp() {
         let bytes = b"RIFFxxxxWEBP";
-        assert_eq!(detect_image_format("https://example.com/img", "image/webp", bytes), "webp");
+        assert_eq!(
+            detect_image_format("https://example.com/img", "image/webp", bytes),
+            "webp"
+        );
     }
 
     #[test]
     fn detect_format_content_type_strips_params() {
         // "image/png; charset=utf-8" should still resolve to png
         let bytes = b"\x89PNG";
-        assert_eq!(detect_image_format("https://example.com/x", "image/png; charset=utf-8", bytes), "png");
+        assert_eq!(
+            detect_image_format("https://example.com/x", "image/png; charset=utf-8", bytes),
+            "png"
+        );
     }
 
     // ── sniff_image_magic ─────────────────────────────────────────────────
@@ -2139,61 +2565,98 @@ mod image_tests {
 
     #[test]
     fn url_ext_png() {
-        assert_eq!(guess_extension_from_url("https://example.com/logo.png"), "png");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/logo.png"),
+            "png"
+        );
     }
 
     #[test]
     fn url_ext_jpeg() {
-        assert_eq!(guess_extension_from_url("https://cdn.example.com/photo.jpeg"), "jpg");
+        assert_eq!(
+            guess_extension_from_url("https://cdn.example.com/photo.jpeg"),
+            "jpg"
+        );
     }
 
     #[test]
     fn url_ext_jpg() {
-        assert_eq!(guess_extension_from_url("https://cdn.example.com/photo.jpg"), "jpg");
+        assert_eq!(
+            guess_extension_from_url("https://cdn.example.com/photo.jpg"),
+            "jpg"
+        );
     }
 
     #[test]
     fn url_ext_svg() {
-        assert_eq!(guess_extension_from_url("https://example.com/icon.svg"), "svg");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/icon.svg"),
+            "svg"
+        );
     }
 
     #[test]
     fn url_ext_strips_query() {
-        assert_eq!(guess_extension_from_url("https://example.com/img.png?v=2&size=large"), "png");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/img.png?v=2&size=large"),
+            "png"
+        );
     }
 
     #[test]
     fn url_ext_strips_fragment() {
-        assert_eq!(guess_extension_from_url("https://example.com/photo.jpg#section"), "jpg");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/photo.jpg#section"),
+            "jpg"
+        );
     }
 
     #[test]
     fn url_ext_no_extension_returns_img() {
-        assert_eq!(guess_extension_from_url("https://example.com/images/photo"), "img");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/images/photo"),
+            "img"
+        );
     }
 
     #[test]
     fn url_ext_case_insensitive() {
-        assert_eq!(guess_extension_from_url("https://example.com/img.PNG"), "png");
-        assert_eq!(guess_extension_from_url("https://example.com/img.GIF"), "gif");
+        assert_eq!(
+            guess_extension_from_url("https://example.com/img.PNG"),
+            "png"
+        );
+        assert_eq!(
+            guess_extension_from_url("https://example.com/img.GIF"),
+            "gif"
+        );
     }
 
     // ── mime_to_ext ───────────────────────────────────────────────────────
 
     #[test]
-    fn mime_png() { assert_eq!(mime_to_ext("image/png"), Some("png")); }
+    fn mime_png() {
+        assert_eq!(mime_to_ext("image/png"), Some("png"));
+    }
 
     #[test]
-    fn mime_jpeg() { assert_eq!(mime_to_ext("image/jpeg"), Some("jpg")); }
+    fn mime_jpeg() {
+        assert_eq!(mime_to_ext("image/jpeg"), Some("jpg"));
+    }
 
     #[test]
-    fn mime_svg() { assert_eq!(mime_to_ext("image/svg+xml"), Some("svg")); }
+    fn mime_svg() {
+        assert_eq!(mime_to_ext("image/svg+xml"), Some("svg"));
+    }
 
     #[test]
-    fn mime_webp() { assert_eq!(mime_to_ext("image/webp"), Some("webp")); }
+    fn mime_webp() {
+        assert_eq!(mime_to_ext("image/webp"), Some("webp"));
+    }
 
     #[test]
-    fn mime_gif() { assert_eq!(mime_to_ext("image/gif"), Some("gif")); }
+    fn mime_gif() {
+        assert_eq!(mime_to_ext("image/gif"), Some("gif"));
+    }
 
     #[test]
     fn mime_unknown_returns_none() {
@@ -2449,6 +2912,7 @@ mod image_tests {
             list_stack: Vec::new(),
             ordered_start_stack: Vec::new(),
             ordered_counter_stack: Vec::new(),
+            list_tight_stack: Vec::new(),
             list_depth: 0,
             syntax_theme: "InspiredGitHub".to_string(),
             mono_font: "DejaVu Sans Mono".to_string(),
@@ -2512,10 +2976,15 @@ mod image_tests {
         let mut r = make_renderer_in(&dir);
         r.no_remote_images = true;
         let result = r.resolve_image("https://example.com/photo.png");
-        assert!(result.is_err(), "expected error when remote images disabled");
+        assert!(
+            result.is_err(),
+            "expected error when remote images disabled"
+        );
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("remote images disabled") || msg.contains("--no-remote-images"),
-            "unexpected message: {msg}");
+        assert!(
+            msg.contains("remote images disabled") || msg.contains("--no-remote-images"),
+            "unexpected message: {msg}"
+        );
     }
 
     // ── data URI round-trip ───────────────────────────────────────────────
@@ -2585,15 +3054,27 @@ mod image_tests {
         let md = "# Test\n\n![Missing image](nonexistent.png)\n\nSome text.\n";
         let config = test_config(&dir);
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
-        assert!(typst_src.contains("\\[Image:"), "expected fallback placeholder, got:\n{typst_src}");
+        assert!(
+            typst_src.contains("\\[Image:"),
+            "expected fallback placeholder, got:\n{typst_src}"
+        );
         // When alt text is present, the fallback uses the alt text as the label.
-        assert!(typst_src.contains("Missing image"), "should use alt text in fallback:\n{typst_src}");
+        assert!(
+            typst_src.contains("Missing image"),
+            "should use alt text in fallback:\n{typst_src}"
+        );
 
         // Case 2: no alt text — fallback label uses filename.
         let md2 = "# Test\n\n![](nonexistent.png)\n\nSome text.\n";
         let typst_src2 = crate::renderer::markdown_to_typst_pub(md2, &config).unwrap();
-        assert!(typst_src2.contains("\\[Image:"), "expected fallback placeholder, got:\n{typst_src2}");
-        assert!(typst_src2.contains("nonexistent.png"), "should include filename in fallback:\n{typst_src2}");
+        assert!(
+            typst_src2.contains("\\[Image:"),
+            "expected fallback placeholder, got:\n{typst_src2}"
+        );
+        assert!(
+            typst_src2.contains("nonexistent.png"),
+            "should include filename in fallback:\n{typst_src2}"
+        );
     }
 
     #[test]
@@ -2604,7 +3085,10 @@ mod image_tests {
         let md = "# Test\n\n![A diagram](diagram.svg)\n";
         let config = test_config(&dir);
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
-        assert!(typst_src.contains("format: \"svg\""), "expected SVG format arg, got:\n{typst_src}");
+        assert!(
+            typst_src.contains("format: \"svg\""),
+            "expected SVG format arg, got:\n{typst_src}"
+        );
     }
 
     #[test]
@@ -2615,7 +3099,10 @@ mod image_tests {
         let md = "![Quarterly results](chart.png)\n";
         let config = test_config(&dir);
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
-        assert!(typst_src.contains("caption: [Quarterly results]"), "got:\n{typst_src}");
+        assert!(
+            typst_src.contains("caption: [Quarterly results]"),
+            "got:\n{typst_src}"
+        );
     }
 
     #[test]
@@ -2626,7 +3113,10 @@ mod image_tests {
         let md = "![](photo.png)\n";
         let config = test_config(&dir);
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
-        assert!(!typst_src.contains("caption"), "should have no caption, got:\n{typst_src}");
+        assert!(
+            !typst_src.contains("caption"),
+            "should have no caption, got:\n{typst_src}"
+        );
     }
 
     #[test]
@@ -2636,10 +3126,19 @@ mod image_tests {
         let config = test_config(&dir);
         let typst_src = crate::renderer::markdown_to_typst_pub(md, &config).unwrap();
         // Should have a fallback block, not an image() call with the https URL
-        assert!(!typst_src.contains("image(\"https://"), "should not emit remote URL, got:\n{typst_src}");
-        assert!(typst_src.contains("#block("), "expected fallback block, got:\n{typst_src}");
+        assert!(
+            !typst_src.contains("image(\"https://"),
+            "should not emit remote URL, got:\n{typst_src}"
+        );
+        assert!(
+            typst_src.contains("#block("),
+            "expected fallback block, got:\n{typst_src}"
+        );
         // Body text after the image should still be present
-        assert!(typst_src.contains("Some text after"), "body text missing, got:\n{typst_src}");
+        assert!(
+            typst_src.contains("Some text after"),
+            "body text missing, got:\n{typst_src}"
+        );
     }
 }
 
@@ -2678,22 +3177,42 @@ mod gfm_tests {
         let md = "- Item A\n  - Item B\n    - Item C\n- Item D\n";
         let out = render(md);
         // Top-level items have no indent
-        assert!(out.contains("- Item A"), "expected top-level bullet, got:\n{out}");
-        assert!(out.contains("- Item D"), "expected top-level bullet, got:\n{out}");
+        assert!(
+            out.contains("- Item A"),
+            "expected top-level bullet, got:\n{out}"
+        );
+        assert!(
+            out.contains("- Item D"),
+            "expected top-level bullet, got:\n{out}"
+        );
         // Nested items should be indented (2 spaces per level)
-        assert!(out.contains("  - Item B"), "expected 1-level indent, got:\n{out}");
-        assert!(out.contains("    - Item C"), "expected 2-level indent, got:\n{out}");
+        assert!(
+            out.contains("  - Item B"),
+            "expected 1-level indent, got:\n{out}"
+        );
+        assert!(
+            out.contains("    - Item C"),
+            "expected 2-level indent, got:\n{out}"
+        );
     }
 
     #[test]
     fn nested_ordered_list_indents() {
         let md = "1. First\n   1. Nested one\n   2. Nested two\n2. Second\n";
         let out = render(md);
-        assert!(out.contains("+ First"), "expected ordered marker, got:\n{out}");
-        assert!(out.contains("+ Second"), "expected ordered marker, got:\n{out}");
+        assert!(
+            out.contains("+ First"),
+            "expected ordered marker, got:\n{out}"
+        );
+        assert!(
+            out.contains("+ Second"),
+            "expected ordered marker, got:\n{out}"
+        );
         // Nested ordered items should be indented
-        assert!(out.contains("  + Nested one") || out.contains("   + Nested one"),
-            "expected indented nested ordered item, got:\n{out}");
+        assert!(
+            out.contains("  + Nested one") || out.contains("   + Nested one"),
+            "expected indented nested ordered item, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2703,7 +3222,10 @@ mod gfm_tests {
         assert!(out.contains("- Bullet"), "got:\n{out}");
         assert!(out.contains("- Another bullet"), "got:\n{out}");
         // The nested ordered items should appear indented somewhere
-        assert!(out.contains("+ Ordered sub"), "expected ordered sub-item, got:\n{out}");
+        assert!(
+            out.contains("+ Ordered sub"),
+            "expected ordered sub-item, got:\n{out}"
+        );
     }
 
     // ── Ordered list numbering ────────────────────────────────────────────────
@@ -2734,7 +3256,10 @@ mod gfm_tests {
         let out = render(md);
         // Must use `+` not `-`
         assert!(out.contains("+ One"), "expected `+` marker, got:\n{out}");
-        assert!(!out.contains("- One"), "should not use `-` for ordered, got:\n{out}");
+        assert!(
+            !out.contains("- One"),
+            "should not use `-` for ordered, got:\n{out}"
+        );
     }
 
     // ── Task lists ────────────────────────────────────────────────────────────
@@ -2744,7 +3269,10 @@ mod gfm_tests {
         let md = "- [ ] Task one\n- [ ] Task two\n";
         let out = render(md);
         // Unchecked checkbox glyph
-        assert!(out.contains("☐"), "expected ☐ for unchecked task, got:\n{out}");
+        assert!(
+            out.contains("☐"),
+            "expected ☐ for unchecked task, got:\n{out}"
+        );
         assert!(out.contains("Task one"), "got:\n{out}");
     }
 
@@ -2753,7 +3281,10 @@ mod gfm_tests {
         let md = "- [x] Done task\n- [X] Also done\n";
         let out = render(md);
         // Checked checkbox glyph
-        assert!(out.contains("☑"), "expected ☑ for checked task, got:\n{out}");
+        assert!(
+            out.contains("☑"),
+            "expected ☑ for checked task, got:\n{out}"
+        );
         assert!(out.contains("Done task"), "got:\n{out}");
     }
 
@@ -2772,7 +3303,10 @@ mod gfm_tests {
         let md = "- [x] Done\n";
         let out = render(md);
         // Task items always use `- ` bullet marker (not `+ `)
-        assert!(out.contains("- "), "expected bullet marker for task item, got:\n{out}");
+        assert!(
+            out.contains("- "),
+            "expected bullet marker for task item, got:\n{out}"
+        );
     }
 
     // ── Table alignment markers ───────────────────────────────────────────────
@@ -2782,21 +3316,30 @@ mod gfm_tests {
         let md = "| Name |\n|:-----|\n| Alice |\n";
         let out = render(md);
         assert!(out.contains("#table("), "got:\n{out}");
-        assert!(out.contains("align: left"), "expected left alignment, got:\n{out}");
+        assert!(
+            out.contains("align: left"),
+            "expected left alignment, got:\n{out}"
+        );
     }
 
     #[test]
     fn table_right_align() {
         let md = "| Price |\n|------:|\n| 9.99 |\n";
         let out = render(md);
-        assert!(out.contains("align: right"), "expected right alignment, got:\n{out}");
+        assert!(
+            out.contains("align: right"),
+            "expected right alignment, got:\n{out}"
+        );
     }
 
     #[test]
     fn table_center_align() {
         let md = "| Status |\n|:------:|\n| OK |\n";
         let out = render(md);
-        assert!(out.contains("align: center"), "expected center alignment, got:\n{out}");
+        assert!(
+            out.contains("align: center"),
+            "expected center alignment, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2804,7 +3347,10 @@ mod gfm_tests {
         let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n";
         let out = render(md);
         assert!(out.contains("align: left"), "expected left, got:\n{out}");
-        assert!(out.contains("align: center"), "expected center, got:\n{out}");
+        assert!(
+            out.contains("align: center"),
+            "expected center, got:\n{out}"
+        );
         assert!(out.contains("align: right"), "expected right, got:\n{out}");
     }
 
@@ -2813,7 +3359,10 @@ mod gfm_tests {
         let md = "| Col1 | Col2 |\n|------|------|\n| a | b |\n";
         let out = render(md);
         // Header row cells should be wrapped in #strong[…]
-        assert!(out.contains("#strong["), "expected header bold, got:\n{out}");
+        assert!(
+            out.contains("#strong["),
+            "expected header bold, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2829,7 +3378,10 @@ mod gfm_tests {
         let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n";
         let out = render(md);
         // columns: (1fr, 1fr, 1fr)
-        assert!(out.contains("1fr, 1fr, 1fr"), "expected 3 fractional columns, got:\n{out}");
+        assert!(
+            out.contains("1fr, 1fr, 1fr"),
+            "expected 3 fractional columns, got:\n{out}"
+        );
     }
 
     // ── Autolinks ────────────────────────────────────────────────────────────
@@ -2857,7 +3409,10 @@ mod gfm_tests {
         let md = "<https://rust-lang.org>\n";
         let out = render(md);
         // Should be compact: #link("https://rust-lang.org") not #link("...", [...])
-        assert!(out.contains("#link(\"https://rust-lang.org\")"), "expected compact link, got:\n{out}");
+        assert!(
+            out.contains("#link(\"https://rust-lang.org\")"),
+            "expected compact link, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2865,7 +3420,10 @@ mod gfm_tests {
         let md = "[Rust](https://rust-lang.org)\n";
         let out = render(md);
         // Has label, so should use #link(url, [label]) form
-        assert!(out.contains("#link(\"https://rust-lang.org\", [Rust])"), "got:\n{out}");
+        assert!(
+            out.contains("#link(\"https://rust-lang.org\", [Rust])"),
+            "got:\n{out}"
+        );
     }
 
     // ── Footnotes ────────────────────────────────────────────────────────────
@@ -2875,7 +3433,10 @@ mod gfm_tests {
         let md = "Text with a footnote.[^1]\n\n[^1]: The footnote body.\n";
         let out = render(md);
         // Reference becomes superscript
-        assert!(out.contains("#super["), "expected superscript for footnote ref, got:\n{out}");
+        assert!(
+            out.contains("#super["),
+            "expected superscript for footnote ref, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2883,9 +3444,15 @@ mod gfm_tests {
         let md = "Here[^note].\n\n[^note]: This is the note.\n";
         let out = render(md);
         // Definition body should appear in output (after the separator line)
-        assert!(out.contains("This is the note."), "expected footnote body, got:\n{out}");
+        assert!(
+            out.contains("This is the note."),
+            "expected footnote body, got:\n{out}"
+        );
         // A separator line should precede the footnotes
-        assert!(out.contains("#line(length: 100%)"), "expected footnote separator line, got:\n{out}");
+        assert!(
+            out.contains("#line(length: 100%)"),
+            "expected footnote separator line, got:\n{out}"
+        );
     }
 
     #[test]
@@ -2920,7 +3487,10 @@ mod gfm_tests {
     fn definition_list_details_are_indented() {
         let md = "Term\n:   Definition text here.\n";
         let out = render(md);
-        assert!(out.contains("#pad(left:"), "expected indented details, got:\n{out}");
+        assert!(
+            out.contains("#pad(left:"),
+            "expected indented details, got:\n{out}"
+        );
         assert!(out.contains("Definition text here."), "got:\n{out}");
     }
 
@@ -2994,19 +3564,34 @@ Typst
 
         // Table with alignment
         assert!(out.contains("#table("), "table, got:\n{out}");
-        assert!(out.contains("align: right"), "right-align price col, got:\n{out}");
-        assert!(out.contains("align: center"), "center-align qty col, got:\n{out}");
+        assert!(
+            out.contains("align: right"),
+            "right-align price col, got:\n{out}"
+        );
+        assert!(
+            out.contains("align: center"),
+            "center-align qty col, got:\n{out}"
+        );
 
         // Autolinks
         assert!(out.contains("https://example.com"), "autolink, got:\n{out}");
 
         // Footnote
         assert!(out.contains("#super["), "footnote ref, got:\n{out}");
-        assert!(out.contains("Footnote body text."), "footnote body, got:\n{out}");
+        assert!(
+            out.contains("Footnote body text."),
+            "footnote body, got:\n{out}"
+        );
 
         // Definition list
-        assert!(out.contains("#strong["), "definition term bold, got:\n{out}");
+        assert!(
+            out.contains("#strong["),
+            "definition term bold, got:\n{out}"
+        );
         assert!(out.contains("Markdown"), "definition term, got:\n{out}");
-        assert!(out.contains("lightweight markup language"), "definition detail, got:\n{out}");
+        assert!(
+            out.contains("lightweight markup language"),
+            "definition detail, got:\n{out}"
+        );
     }
 }

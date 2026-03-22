@@ -51,31 +51,31 @@ pub fn run() -> Result<()> {
     eprintln!("  md-to-pdf — doctor / self-check");
     eprintln!("  ─────────────────────────────────");
 
-    let mut checks = Vec::new();
-
-    // 1. Typst engine round-trip
-    checks.push(check_typst_engine());
-
-    // 2. Default body font
-    checks.push(check_font("Libertinus Serif", "body (default)"));
-
-    // 3. Default mono font
-    checks.push(check_font("DejaVu Sans Mono", "mono (default)"));
-
-    // 4. Cache directory writability
-    checks.push(check_cache_dir());
-
-    // 5. Network reachability
-    checks.push(check_network());
-
-    // 6. Rust toolchain (just informational)
-    checks.push(check_rust_version());
+    let checks = vec![
+        // 1. Typst engine round-trip
+        check_typst_engine(),
+        // 2. Default body font
+        check_font("Libertinus Serif", "body (default)"),
+        // 3. Default mono font
+        check_font("DejaVu Sans Mono", "mono (default)"),
+        // 4. Cache directory writability
+        check_cache_dir(),
+        // 5. Network reachability
+        check_network(),
+        // 6. Rust toolchain (just informational)
+        check_rust_version(),
+    ];
 
     // ── print table ───────────────────────────────────────────────────────
     eprintln!();
     let mut any_fail = false;
     for c in &checks {
-        eprintln!("  {} {:<30}  {}", c.result.icon(), c.label, c.result.detail());
+        eprintln!(
+            "  {} {:<30}  {}",
+            c.result.icon(),
+            c.label,
+            c.result.detail()
+        );
         if c.result.is_fail() {
             any_fail = true;
         }
@@ -98,6 +98,7 @@ pub fn run() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn check_typst_engine() -> Check {
+    use std::collections::HashMap;
     use typst::foundations::{Bytes, Datetime, Smart};
     use typst::layout::PagedDocument;
     use typst::text::{Font, FontBook};
@@ -106,7 +107,6 @@ fn check_typst_engine() -> Check {
     use typst_kit::fonts::{FontSearcher, Fonts};
     use typst_pdf::{PdfOptions, pdf};
     use typst_syntax::{FileId, Source, VirtualPath};
-    use std::collections::HashMap;
 
     struct MiniWorld {
         library: LazyHash<Library>,
@@ -117,28 +117,41 @@ fn check_typst_engine() -> Check {
     }
 
     impl World for MiniWorld {
-        fn library(&self) -> &LazyHash<Library> { &self.library }
-        fn book(&self) -> &LazyHash<FontBook> { &self.book }
-        fn main(&self) -> FileId { self.main }
+        fn library(&self) -> &LazyHash<Library> {
+            &self.library
+        }
+        fn book(&self) -> &LazyHash<FontBook> {
+            &self.book
+        }
+        fn main(&self) -> FileId {
+            self.main
+        }
         fn source(&self, id: FileId) -> typst::diag::FileResult<Source> {
             self.sources.get(&id).cloned().ok_or_else(|| {
                 typst::diag::FileError::NotFound(id.vpath().as_rootless_path().to_path_buf())
             })
         }
         fn file(&self, id: FileId) -> typst::diag::FileResult<Bytes> {
-            Err(typst::diag::FileError::NotFound(id.vpath().as_rootless_path().to_path_buf()))
+            Err(typst::diag::FileError::NotFound(
+                id.vpath().as_rootless_path().to_path_buf(),
+            ))
         }
         fn font(&self, index: usize) -> Option<Font> {
             self.fonts.get(index).and_then(|s| s.get())
         }
-        fn today(&self, _: Option<i64>) -> Option<Datetime> { None }
+        fn today(&self, _: Option<i64>) -> Option<Datetime> {
+            None
+        }
     }
 
     let mut searcher = FontSearcher::new();
     let Fonts { book, fonts } = searcher.search();
     let main_id = FileId::new(None, VirtualPath::new("/doctor-check.typ"));
     let mut sources = HashMap::new();
-    sources.insert(main_id, Source::new(main_id, "= Doctor check\nHello, world!".to_string()));
+    sources.insert(
+        main_id,
+        Source::new(main_id, "= Doctor check\nHello, world!".to_string()),
+    );
 
     let world = MiniWorld {
         library: LazyHash::new(Library::default()),
@@ -152,7 +165,13 @@ fn check_typst_engine() -> Check {
     match warned.output {
         Ok(doc) => {
             let pages = doc.pages.len();
-            match pdf(&doc, &PdfOptions { ident: Smart::Auto, ..PdfOptions::default() }) {
+            match pdf(
+                &doc,
+                &PdfOptions {
+                    ident: Smart::Auto,
+                    ..PdfOptions::default()
+                },
+            ) {
                 Ok(bytes) => Check {
                     label: "Typst engine",
                     result: CheckResult::Pass(format!("{} page(s), {} bytes", pages, bytes.len())),

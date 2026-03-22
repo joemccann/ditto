@@ -11,16 +11,9 @@
 //!  - Markdown → Typst round-trips exercising the full render path
 
 use md_to_pdf::renderer::{
-    FontSet, ImageInfo, RenderConfig, SizeHint,
-    css_length_to_typst,
-    detect_image_format,
-    format_image_typst,
-    format_image_typst_sized,
-    is_svg_bytes,
-    markdown_to_typst_pub as md_to_typst,
-    mime_to_ext,
-    missing_image_fallback,
-    sniff_image_magic,
+    FontSet, ImageInfo, RenderConfig, SizeHint, css_length_to_typst, detect_image_format,
+    format_image_typst, format_image_typst_sized, is_svg_bytes,
+    markdown_to_typst_pub as md_to_typst, mime_to_ext, missing_image_fallback, sniff_image_magic,
     stable_name_pub as stable_name,
 };
 use std::fs;
@@ -66,22 +59,25 @@ fn make_info(path: &str, is_svg: bool) -> ImageInfo {
 #[test]
 fn mime_to_ext_all_known_types() {
     let cases: &[(&str, &str)] = &[
-        ("image/png",                "png"),
-        ("image/jpeg",               "jpg"),
-        ("image/jpg",                "jpg"),
-        ("image/gif",                "gif"),
-        ("image/webp",               "webp"),
-        ("image/svg+xml",            "svg"),
-        ("image/svg",                "svg"),
-        ("image/bmp",                "bmp"),
-        ("image/tiff",               "tiff"),
-        ("image/avif",               "avif"),
-        ("image/x-icon",             "ico"),
+        ("image/png", "png"),
+        ("image/jpeg", "jpg"),
+        ("image/jpg", "jpg"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+        ("image/svg+xml", "svg"),
+        ("image/svg", "svg"),
+        ("image/bmp", "bmp"),
+        ("image/tiff", "tiff"),
+        ("image/avif", "avif"),
+        ("image/x-icon", "ico"),
         ("image/vnd.microsoft.icon", "ico"),
     ];
     for (mime, expected) in cases {
-        assert_eq!(mime_to_ext(mime), Some(*expected),
-            "mime_to_ext({mime:?}) should be {expected:?}");
+        assert_eq!(
+            mime_to_ext(mime),
+            Some(*expected),
+            "mime_to_ext({mime:?}) should be {expected:?}"
+        );
     }
 }
 
@@ -118,7 +114,11 @@ fn detect_format_content_type_with_quality_param() {
     // Some servers send "image/jpeg; quality=85"
     let bytes = b"\xff\xd8\xff\xe0";
     assert_eq!(
-        detect_image_format("https://example.com/img.jpg", "image/jpeg; quality=85", bytes),
+        detect_image_format(
+            "https://example.com/img.jpg",
+            "image/jpeg; quality=85",
+            bytes
+        ),
         "jpg"
     );
 }
@@ -128,7 +128,11 @@ fn detect_format_falls_back_to_magic_on_unknown_ct() {
     // Content-Type is unrecognised → fall back to magic bytes
     let png_bytes = b"\x89PNG\r\n\x1a\nsome data";
     assert_eq!(
-        detect_image_format("https://example.com/img", "application/octet-stream", png_bytes),
+        detect_image_format(
+            "https://example.com/img",
+            "application/octet-stream",
+            png_bytes
+        ),
         "png"
     );
 }
@@ -138,7 +142,11 @@ fn detect_format_falls_back_to_url_when_ct_and_magic_fail() {
     // Unknown CT + unrecognised bytes → fall back to URL extension
     let garbage = b"??????????garbage";
     assert_eq!(
-        detect_image_format("https://cdn.example.com/logo.webp", "application/octet-stream", garbage),
+        detect_image_format(
+            "https://cdn.example.com/logo.webp",
+            "application/octet-stream",
+            garbage
+        ),
         "webp"
     );
 }
@@ -146,7 +154,10 @@ fn detect_format_falls_back_to_url_when_ct_and_magic_fail() {
 #[test]
 fn detect_format_empty_ct_uses_magic() {
     let jpeg = b"\xff\xd8\xff\xe1";
-    assert_eq!(detect_image_format("https://example.com/x", "", jpeg), "jpg");
+    assert_eq!(
+        detect_image_format("https://example.com/x", "", jpeg),
+        "jpg"
+    );
 }
 
 #[test]
@@ -276,7 +287,9 @@ fn is_svg_tab_before_tag() {
 fn is_svg_case_insensitive_namespace() {
     // SVG tags are case-sensitive per spec, but check that the checker
     // works on realistic inputs with the proper lowercase <svg> tag
-    assert!(is_svg_bytes(b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
+    assert!(is_svg_bytes(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"
+    ));
 }
 
 #[test]
@@ -313,7 +326,10 @@ fn local_svg_file_emits_format_svg() {
     fs::write(&svg_path, b"<svg></svg>").unwrap();
     let md = "![A diagram](diagram.svg)\n";
     let out = render(md, &dir);
-    assert!(out.contains("format: \"svg\""), "expected SVG format arg:\n{out}");
+    assert!(
+        out.contains("format: \"svg\""),
+        "expected SVG format arg:\n{out}"
+    );
 }
 
 #[test]
@@ -335,42 +351,42 @@ fn local_svg_file_with_special_chars_in_alt() {
 #[test]
 fn sizing_px_to_pt() {
     // 96px → 72pt (×0.75), 100px → 75pt
-    assert_eq!(css_length_to_typst("96px"),  Some("72.0pt".to_string()));
+    assert_eq!(css_length_to_typst("96px"), Some("72.0pt".to_string()));
     assert_eq!(css_length_to_typst("100px"), Some("75.0pt".to_string()));
-    assert_eq!(css_length_to_typst("1px"),   Some("0.8pt".to_string()));
+    assert_eq!(css_length_to_typst("1px"), Some("0.8pt".to_string()));
 }
 
 #[test]
 fn sizing_bare_integer_as_pixels() {
-    assert_eq!(css_length_to_typst("200"),  Some("150.0pt".to_string()));
-    assert_eq!(css_length_to_typst("0"),    Some("0.0pt".to_string()));
+    assert_eq!(css_length_to_typst("200"), Some("150.0pt".to_string()));
+    assert_eq!(css_length_to_typst("0"), Some("0.0pt".to_string()));
     assert_eq!(css_length_to_typst("1000"), Some("750.0pt".to_string()));
 }
 
 #[test]
 fn sizing_percent_passthrough() {
     assert_eq!(css_length_to_typst("100%"), Some("100%".to_string()));
-    assert_eq!(css_length_to_typst("50%"),  Some("50%".to_string()));
-    assert_eq!(css_length_to_typst("0%"),   Some("0%".to_string()));
+    assert_eq!(css_length_to_typst("50%"), Some("50%".to_string()));
+    assert_eq!(css_length_to_typst("0%"), Some("0%".to_string()));
     assert_eq!(css_length_to_typst("33.3%"), Some("33.3%".to_string()));
 }
 
 #[test]
 fn sizing_em_passthrough() {
-    assert_eq!(css_length_to_typst("1em"),  Some("1em".to_string()));
+    assert_eq!(css_length_to_typst("1em"), Some("1em".to_string()));
     assert_eq!(css_length_to_typst("2.5em"), Some("2.5em".to_string()));
 }
 
 #[test]
 fn sizing_rem_converts_to_em() {
     assert_eq!(css_length_to_typst("1.5rem"), Some("1.5em".to_string()));
-    assert_eq!(css_length_to_typst("2rem"),   Some("2em".to_string()));
+    assert_eq!(css_length_to_typst("2rem"), Some("2em".to_string()));
 }
 
 #[test]
 fn sizing_pt_passthrough() {
     assert_eq!(css_length_to_typst("12pt"), Some("12pt".to_string()));
-    assert_eq!(css_length_to_typst("0pt"),  Some("0pt".to_string()));
+    assert_eq!(css_length_to_typst("0pt"), Some("0pt".to_string()));
 }
 
 #[test]
@@ -415,7 +431,10 @@ fn format_image_png_no_alt_no_caption() {
     let out = format_image_typst(&info, "");
     assert!(out.contains("image("), "got:\n{out}");
     assert!(!out.contains("caption"), "should have no caption:\n{out}");
-    assert!(!out.contains("format:"), "should have no format: for png:\n{out}");
+    assert!(
+        !out.contains("format:"),
+        "should have no format: for png:\n{out}"
+    );
 }
 
 #[test]
@@ -431,7 +450,10 @@ fn format_image_caption_escapes_special_chars() {
     // Hash, brackets, dollar, braces — all must be escaped in caption
     let out = format_image_typst(&info, "#heading [bracket] $99 {brace}");
     assert!(out.contains("\\#heading"), "hash not escaped:\n{out}");
-    assert!(out.contains("\\[bracket\\]"), "brackets not escaped:\n{out}");
+    assert!(
+        out.contains("\\[bracket\\]"),
+        "brackets not escaped:\n{out}"
+    );
     assert!(out.contains("\\$99"), "dollar not escaped:\n{out}");
     assert!(out.contains("\\{brace\\}"), "braces not escaped:\n{out}");
 }
@@ -449,7 +471,10 @@ fn format_image_svg_no_alt_still_has_format_arg() {
     let info = make_info("/path/to/icon.svg", true);
     let out = format_image_typst(&info, "");
     assert!(out.contains("format: \"svg\""), "got:\n{out}");
-    assert!(!out.contains("caption"), "no caption when alt is empty:\n{out}");
+    assert!(
+        !out.contains("caption"),
+        "no caption when alt is empty:\n{out}"
+    );
 }
 
 #[test]
@@ -462,10 +487,16 @@ fn format_image_default_width_is_100pct() {
 #[test]
 fn format_image_sized_custom_width() {
     let info = make_info("/img.png", false);
-    let hint = SizeHint { width: Some("60%".to_string()), height: None };
+    let hint = SizeHint {
+        width: Some("60%".to_string()),
+        height: None,
+    };
     let out = format_image_typst_sized(&info, "", &hint);
     assert!(out.contains("width: 60%"), "got:\n{out}");
-    assert!(!out.contains("height:"), "no height when not specified:\n{out}");
+    assert!(
+        !out.contains("height:"),
+        "no height when not specified:\n{out}"
+    );
 }
 
 #[test]
@@ -485,7 +516,10 @@ fn format_image_sized_with_both_dimensions() {
 fn format_image_sized_px_converted_width() {
     let info = make_info("/img.png", false);
     let px_width = css_length_to_typst("400px").unwrap();
-    let hint = SizeHint { width: Some(px_width), height: None };
+    let hint = SizeHint {
+        width: Some(px_width),
+        height: None,
+    };
     let out = format_image_typst_sized(&info, "", &hint);
     assert!(out.contains("width: 300.0pt"), "got:\n{out}");
 }
@@ -493,7 +527,10 @@ fn format_image_sized_px_converted_width() {
 #[test]
 fn format_image_svg_with_custom_width() {
     let info = make_info("/diagram.svg", true);
-    let hint = SizeHint { width: Some("80%".to_string()), height: None };
+    let hint = SizeHint {
+        width: Some("80%".to_string()),
+        height: None,
+    };
     let out = format_image_typst_sized(&info, "Architecture", &hint);
     assert!(out.contains("format: \"svg\""), "got:\n{out}");
     assert!(out.contains("width: 80%"), "got:\n{out}");
@@ -504,14 +541,20 @@ fn format_image_svg_with_custom_width() {
 fn format_image_wraps_in_figure() {
     let info = make_info("/img.png", false);
     let out = format_image_typst(&info, "My image");
-    assert!(out.starts_with("#figure("), "should start with #figure:\n{out}");
+    assert!(
+        out.starts_with("#figure("),
+        "should start with #figure:\n{out}"
+    );
 }
 
 #[test]
 fn format_image_ends_with_double_newline() {
     let info = make_info("/img.png", false);
     let out = format_image_typst(&info, "");
-    assert!(out.ends_with("\n\n"), "should end with double newline:\n{out}");
+    assert!(
+        out.ends_with("\n\n"),
+        "should end with double newline:\n{out}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -547,9 +590,18 @@ fn fallback_without_alt_uses_filename() {
 #[test]
 fn fallback_strips_query_string_from_url() {
     let out = missing_image_fallback("https://cdn.example.com/img.png?v=3&size=large", "");
-    assert!(out.contains("img.png"), "should include bare filename:\n{out}");
-    assert!(!out.contains("v=3"), "should not include query param:\n{out}");
-    assert!(!out.contains("size=large"), "should not include query param:\n{out}");
+    assert!(
+        out.contains("img.png"),
+        "should include bare filename:\n{out}"
+    );
+    assert!(
+        !out.contains("v=3"),
+        "should not include query param:\n{out}"
+    );
+    assert!(
+        !out.contains("size=large"),
+        "should not include query param:\n{out}"
+    );
 }
 
 #[test]
@@ -563,7 +615,10 @@ fn fallback_with_alt_also_shows_filename() {
 #[test]
 fn fallback_empty_url_and_alt() {
     let out = missing_image_fallback("", "");
-    assert!(out.contains("#block("), "should still produce a block:\n{out}");
+    assert!(
+        out.contains("#block("),
+        "should still produce a block:\n{out}"
+    );
 }
 
 #[test]
@@ -577,7 +632,10 @@ fn fallback_special_chars_in_alt_escaped() {
 #[test]
 fn fallback_special_chars_in_filename_escaped() {
     let out = missing_image_fallback("path/to/image [1].png", "");
-    assert!(out.contains("\\[1\\]") || out.contains("image"), "got:\n{out}");
+    assert!(
+        out.contains("\\[1\\]") || out.contains("image"),
+        "got:\n{out}"
+    );
 }
 
 #[test]
@@ -589,13 +647,19 @@ fn fallback_uses_center_align() {
 #[test]
 fn fallback_uses_stroke() {
     let out = missing_image_fallback("img.png", "");
-    assert!(out.contains("stroke:"), "fallback should have a border:\n{out}");
+    assert!(
+        out.contains("stroke:"),
+        "fallback should have a border:\n{out}"
+    );
 }
 
 #[test]
 fn fallback_full_width() {
     let out = missing_image_fallback("img.png", "");
-    assert!(out.contains("width: 100%"), "fallback should span full width:\n{out}");
+    assert!(
+        out.contains("width: 100%"),
+        "fallback should span full width:\n{out}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -619,8 +683,10 @@ fn stable_name_different_urls_different_hashes() {
 fn stable_name_is_hex_string() {
     let name = stable_name("https://example.com/test.png");
     assert!(!name.is_empty());
-    assert!(name.chars().all(|c| c.is_ascii_hexdigit()),
-        "hash should be hex digits only: {name}");
+    assert!(
+        name.chars().all(|c| c.is_ascii_hexdigit()),
+        "hash should be hex digits only: {name}"
+    );
 }
 
 #[test]
@@ -704,21 +770,30 @@ fn md_missing_local_image_emits_fallback() {
     let out = render("![Missing](nonexistent.png)\n", &dir);
     assert!(out.contains("#block("), "expected fallback:\n{out}");
     assert!(out.contains("\\[Image:"), "expected Image marker:\n{out}");
-    assert!(!out.contains("#figure(image("), "should not emit real image:\n{out}");
+    assert!(
+        !out.contains("#figure(image("),
+        "should not emit real image:\n{out}"
+    );
 }
 
 #[test]
 fn md_missing_image_shows_alt_in_fallback() {
     let dir = TempDir::new().unwrap();
     let out = render("![My missing diagram](nope.png)\n", &dir);
-    assert!(out.contains("My missing diagram"), "alt text should appear in fallback:\n{out}");
+    assert!(
+        out.contains("My missing diagram"),
+        "alt text should appear in fallback:\n{out}"
+    );
 }
 
 #[test]
 fn md_missing_image_shows_filename_in_fallback() {
     let dir = TempDir::new().unwrap();
     let out = render("![](nope.png)\n", &dir);
-    assert!(out.contains("nope.png"), "filename should appear in fallback:\n{out}");
+    assert!(
+        out.contains("nope.png"),
+        "filename should appear in fallback:\n{out}"
+    );
 }
 
 #[test]
@@ -726,7 +801,10 @@ fn md_remote_image_disabled_emits_fallback() {
     let dir = TempDir::new().unwrap();
     let out = render("![Cloud image](https://cdn.example.com/photo.jpg)\n", &dir);
     // With no_remote_images=true, should emit fallback
-    assert!(!out.contains("image(\"https://"), "should not emit remote URL:\n{out}");
+    assert!(
+        !out.contains("image(\"https://"),
+        "should not emit remote URL:\n{out}"
+    );
     assert!(out.contains("#block("), "expected fallback:\n{out}");
 }
 
@@ -734,7 +812,10 @@ fn md_remote_image_disabled_emits_fallback() {
 fn md_remote_image_with_alt_shows_in_fallback() {
     let dir = TempDir::new().unwrap();
     let out = render("![Server diagram](https://example.com/arch.png)\n", &dir);
-    assert!(out.contains("Server diagram"), "alt text should appear:\n{out}");
+    assert!(
+        out.contains("Server diagram"),
+        "alt text should appear:\n{out}"
+    );
 }
 
 #[test]
@@ -784,8 +865,14 @@ fn md_multiple_images_all_rendered() {
 #[test]
 fn md_image_alongside_text_text_preserved() {
     let dir = TempDir::new().unwrap();
-    let out = render("Some text before.\n\n![Missing](nope.png)\n\nSome text after.\n", &dir);
-    assert!(out.contains("Some text before."), "text before image:\n{out}");
+    let out = render(
+        "Some text before.\n\n![Missing](nope.png)\n\nSome text after.\n",
+        &dir,
+    );
+    assert!(
+        out.contains("Some text before."),
+        "text before image:\n{out}"
+    );
     assert!(out.contains("Some text after."), "text after image:\n{out}");
 }
 
@@ -805,7 +892,10 @@ fn md_dollar_sign_in_alt_text_escaped() {
     let png = dir.path().join("img.png");
     fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
     let out = render("![Price $9.99](img.png)\n", &dir);
-    assert!(out.contains("\\$9.99"), "dollar in alt text must be escaped:\n{out}");
+    assert!(
+        out.contains("\\$9.99"),
+        "dollar in alt text must be escaped:\n{out}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -823,7 +913,10 @@ fn snapshot_local_png_with_caption() {
     assert!(out.starts_with("#set page("), "preamble:\n{out}");
     assert!(out.contains("#figure(image("), "figure call:\n{out}");
     assert!(out.contains("width: 100%"), "default width:\n{out}");
-    assert!(out.contains("caption: [Figure caption text]"), "caption:\n{out}");
+    assert!(
+        out.contains("caption: [Figure caption text]"),
+        "caption:\n{out}"
+    );
 }
 
 #[test]
@@ -843,8 +936,14 @@ fn snapshot_fallback_missing_with_alt() {
     let dir = TempDir::new().unwrap();
     let out = render("![Broken image](does-not-exist.png)\n", &dir);
 
-    assert!(out.contains("#block(fill: luma(235)"), "fallback fill:\n{out}");
-    assert!(out.contains("stroke: 1pt + luma(180)"), "fallback stroke:\n{out}");
+    assert!(
+        out.contains("#block(fill: luma(235)"),
+        "fallback fill:\n{out}"
+    );
+    assert!(
+        out.contains("stroke: 1pt + luma(180)"),
+        "fallback stroke:\n{out}"
+    );
     assert!(out.contains("\\[Image:"), "image marker:\n{out}");
     assert!(out.contains("Broken image"), "alt text in fallback:\n{out}");
 }
@@ -863,8 +962,16 @@ fn base64_encode(input: &[u8]) -> String {
         let v = (b0 << 16) | (b1 << 8) | b2;
         out.push(ALPHA[((v >> 18) & 0x3f) as usize] as char);
         out.push(ALPHA[((v >> 12) & 0x3f) as usize] as char);
-        if chunk.len() > 1 { out.push(ALPHA[((v >> 6) & 0x3f) as usize] as char); } else { out.push('='); }
-        if chunk.len() > 2 { out.push(ALPHA[(v & 0x3f) as usize] as char); } else { out.push('='); }
+        if chunk.len() > 1 {
+            out.push(ALPHA[((v >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHA[(v & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
     }
     out
 }
@@ -893,7 +1000,10 @@ fn detect_format_svg_from_content_type_with_charset() {
 fn detect_format_webp_from_magic() {
     let mut bytes = [0u8; 12];
     b"RIFF".iter().enumerate().for_each(|(i, &b)| bytes[i] = b);
-    b"WEBP".iter().enumerate().for_each(|(i, &b)| bytes[i + 8] = b);
+    b"WEBP"
+        .iter()
+        .enumerate()
+        .for_each(|(i, &b)| bytes[i + 8] = b);
     assert_eq!(detect_image_format("x", "", &bytes), "webp");
 }
 
@@ -918,7 +1028,7 @@ fn sniff_avif_returns_none_not_crash() {
 #[test]
 fn mime_to_ext_svg_both_forms() {
     assert_eq!(mime_to_ext("image/svg+xml"), Some("svg"));
-    assert_eq!(mime_to_ext("image/svg"),     Some("svg"));
+    assert_eq!(mime_to_ext("image/svg"), Some("svg"));
 }
 
 #[test]
@@ -1044,7 +1154,10 @@ fn format_image_svg_gets_format_svg_arg() {
 #[test]
 fn format_image_sized_none_defaults_to_100pct() {
     let info = make_info("/img.png", false);
-    let hint = SizeHint { width: None, height: None };
+    let hint = SizeHint {
+        width: None,
+        height: None,
+    };
     let out = format_image_typst_sized(&info, "", &hint);
     assert!(out.contains("width: 100%"), "default width: {out}");
 }
@@ -1052,7 +1165,10 @@ fn format_image_sized_none_defaults_to_100pct() {
 #[test]
 fn format_image_sized_height_only() {
     let info = make_info("/img.png", false);
-    let hint = SizeHint { width: None, height: Some("200pt".to_string()) };
+    let hint = SizeHint {
+        width: None,
+        height: Some("200pt".to_string()),
+    };
     let out = format_image_typst_sized(&info, "", &hint);
     assert!(out.contains("height: 200pt"), "height: {out}");
 }
@@ -1079,7 +1195,10 @@ fn fallback_url_with_fragment() {
 fn fallback_relative_path() {
     let out = missing_image_fallback("images/photo.jpg", "Photo");
     assert!(out.contains("Photo"), "alt: {out}");
-    assert!(out.contains("photo.jpg") || out.contains("images"), "path: {out}");
+    assert!(
+        out.contains("photo.jpg") || out.contains("images"),
+        "path: {out}"
+    );
 }
 
 #[test]
@@ -1102,8 +1221,10 @@ fn md_jpeg_local_image_renders_figure() {
     fs::write(&jpg, b"\xff\xd8\xff\xe0some-data").unwrap();
     let out = render("![Photo](photo.jpg)\n", &dir);
     // Should produce a figure (not a fallback)
-    assert!(out.contains("#figure(image(") || out.contains("#block("),
-        "figure or fallback: {out}");
+    assert!(
+        out.contains("#figure(image(") || out.contains("#block("),
+        "figure or fallback: {out}"
+    );
 }
 
 #[test]
@@ -1112,7 +1233,10 @@ fn md_image_without_extension_local() {
     let dir = TempDir::new().unwrap();
     let out = render("![No ext](noextfile)\n", &dir);
     // Should produce some output, either figure or fallback, no crash
-    assert!(out.contains("#figure(image(") || out.contains("#block("), "output: {out}");
+    assert!(
+        out.contains("#figure(image(") || out.contains("#block("),
+        "output: {out}"
+    );
 }
 
 #[test]
@@ -1159,12 +1283,18 @@ fn md_data_uri_plain_svg_non_base64() {
 fn stable_name_empty_string() {
     let name = stable_name("");
     assert!(!name.is_empty(), "even empty string produces a hash");
-    assert!(name.chars().all(|c| c.is_ascii_hexdigit()), "hex only: {name}");
+    assert!(
+        name.chars().all(|c| c.is_ascii_hexdigit()),
+        "hex only: {name}"
+    );
 }
 
 #[test]
 fn stable_name_long_url() {
-    let url = format!("https://cdn.example.com/{}/image.png", "segment/".repeat(50));
+    let url = format!(
+        "https://cdn.example.com/{}/image.png",
+        "segment/".repeat(50)
+    );
     let name = stable_name(&url);
     assert!(!name.is_empty());
     assert!(name.chars().all(|c| c.is_ascii_hexdigit()), "hex: {name}");
@@ -1214,7 +1344,7 @@ fn snapshot_figure_call_structure() {
     fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
     let out = render("![Chart title](chart.png)\n", &dir);
 
-    // Structure: #figure(image("path", width: 100%), caption: [alt]) 
+    // Structure: #figure(image("path", width: 100%), caption: [alt])
     assert!(out.starts_with("#set page"), "preamble: {out}");
     assert!(out.contains("#figure(image("), "figure call: {out}");
     assert!(out.contains("caption: [Chart title]"), "caption: {out}");

@@ -4,7 +4,7 @@ A fast, pure-Rust CLI that converts Markdown (CommonMark + GitHub Flavored Markd
 
 ## Features
 
-- ✅ Full CommonMark + GFM support (tables, strikethrough, task lists, autolinks, footnotes)
+- ✅ CommonMark + GFM (tables, strikethrough, task lists, autolinks, footnotes, definition lists, GitHub Alerts, superscript, subscript, underline)
 - ✅ Fenced code blocks with Syntect syntax highlighting
 - ✅ LaTeX math — `$…$` inline and `$$…$$` display, plus ` ```math ``` ` blocks
 - ✅ Remote image caching (http/https → local cache)
@@ -141,9 +141,24 @@ toc_depth: 2
 
 ```bash
 cargo build --release   # release binary → target/release/md-to-pdf
-cargo test              # run 44 unit tests
+cargo test              # full test suite (725+ tests)
+cargo clippy            # lint
+cargo fmt               # format
 cargo run -- test.md output.pdf
 ```
+
+## Known limitations
+
+Some HTML tags, LaTeX commands, and edge-case Markdown constructs are not fully
+supported. See **[docs/known-limitations.md](docs/known-limitations.md)** for a
+comprehensive list, including:
+
+- Which HTML tags are translated and which are stripped
+- Which CSS properties on `<span>` are honoured (`color` and `font-size` only)
+- Which LaTeX math commands have no Typst equivalent
+- GFM features that are unsupported (wikilinks, custom heading IDs, etc.)
+- Front-matter keys that are recognised (`toc`, `toc_depth`, `toc_title`, `no_toc` only)
+- Image and typography constraints
 
 ## License
 

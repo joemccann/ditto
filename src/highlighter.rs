@@ -33,13 +33,13 @@ fn escape_typst_content(s: &str) -> String {
     for ch in s.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
-            '#'  => out.push_str("\\#"),
-            '['  => out.push_str("\\["),
-            ']'  => out.push_str("\\]"),
-            '@'  => out.push_str("\\@"),
-            '_'  => out.push_str("\\_"),
-            '*'  => out.push_str("\\*"),
-            '$'  => out.push_str("\\$"),
+            '#' => out.push_str("\\#"),
+            '[' => out.push_str("\\["),
+            ']' => out.push_str("\\]"),
+            '@' => out.push_str("\\@"),
+            '_' => out.push_str("\\_"),
+            '*' => out.push_str("\\*"),
+            '$' => out.push_str("\\$"),
             // All other characters (including { } < > ` ~ ^ etc.) are literal.
             other => out.push(other),
         }
@@ -70,11 +70,16 @@ fn typst_rgb(r: u8, g: u8, b: u8) -> String {
 /// ────────
 /// If the language identifier is empty or unknown, the code is rendered
 /// uncoloured in the standard monospace block style.
-pub fn highlight_code_to_typst(code: &str, lang: &str, mono_font: &str, theme_name: &str) -> String {
+pub fn highlight_code_to_typst(
+    code: &str,
+    lang: &str,
+    mono_font: &str,
+    theme_name: &str,
+) -> String {
     // Lazy-static these; they are expensive to load but tiny once loaded.
     use std::sync::OnceLock;
     static SS: OnceLock<SyntaxSet> = OnceLock::new();
-    static TS: OnceLock<ThemeSet>  = OnceLock::new();
+    static TS: OnceLock<ThemeSet> = OnceLock::new();
 
     let ss = SS.get_or_init(SyntaxSet::load_defaults_newlines);
     let ts = TS.get_or_init(ThemeSet::load_defaults);
@@ -92,9 +97,22 @@ pub fn highlight_code_to_typst(code: &str, lang: &str, mono_font: &str, theme_na
 
     // Use a subtle light-gray if the theme background is pure white or transparent,
     // so code blocks have a visible container even on white-paper PDFs.
-    let raw_bg = theme.settings.background.unwrap_or(syntect::highlighting::Color { r: 30, g: 30, b: 30, a: 255 });
+    let raw_bg = theme
+        .settings
+        .background
+        .unwrap_or(syntect::highlighting::Color {
+            r: 30,
+            g: 30,
+            b: 30,
+            a: 255,
+        });
     let bg = if raw_bg.r > 240 && raw_bg.g > 240 && raw_bg.b > 240 {
-        syntect::highlighting::Color { r: 246, g: 248, b: 250, a: 255 }
+        syntect::highlighting::Color {
+            r: 246,
+            g: 248,
+            b: 250,
+            a: 255,
+        }
     } else {
         raw_bg
     };
@@ -126,9 +144,7 @@ pub fn highlight_code_to_typst(code: &str, lang: &str, mono_font: &str, theme_na
         // Also strip Windows \r\n
         let _stripped = stripped.strip_suffix('\r').unwrap_or(stripped);
 
-        let ranges = hl
-            .highlight_line(line, ss)
-            .unwrap_or_default();
+        let ranges = hl.highlight_line(line, ss).unwrap_or_default();
 
         let mut tokens_out = String::new();
         for (style, token) in &ranges {
@@ -144,15 +160,17 @@ pub fn highlight_code_to_typst(code: &str, lang: &str, mono_font: &str, theme_na
             let fg = style.foreground;
             let fill = typst_rgb(fg.r, fg.g, fg.b);
 
-            let is_bold   = style.font_style.contains(FontStyle::BOLD);
+            let is_bold = style.font_style.contains(FontStyle::BOLD);
             let is_italic = style.font_style.contains(FontStyle::ITALIC);
 
             let escaped = escape_typst_content(token_text);
 
             let span = match (is_bold, is_italic) {
-                (true,  true)  => format!("#text(fill: {fill}, weight: \"bold\", style: \"italic\")[{escaped}]"),
-                (true,  false) => format!("#text(fill: {fill}, weight: \"bold\")[{escaped}]"),
-                (false, true)  => format!("#text(fill: {fill}, style: \"italic\")[{escaped}]"),
+                (true, true) => {
+                    format!("#text(fill: {fill}, weight: \"bold\", style: \"italic\")[{escaped}]")
+                }
+                (true, false) => format!("#text(fill: {fill}, weight: \"bold\")[{escaped}]"),
+                (false, true) => format!("#text(fill: {fill}, style: \"italic\")[{escaped}]"),
                 (false, false) => format!("#text(fill: {fill})[{escaped}]"),
             };
             tokens_out.push_str(&span);
@@ -168,11 +186,11 @@ pub fn highlight_code_to_typst(code: &str, lang: &str, mono_font: &str, theme_na
     }
 
     // Remove a trailing blank line that syntect sometimes appends
-    while lines_out.last().map_or(false, |l| l == "#h(0pt)") {
+    while lines_out.last().is_some_and(|l| l == "#h(0pt)") {
         lines_out.pop();
     }
 
-    let body = lines_out.join("\\\n");   // Typst `\` = explicit line-break
+    let body = lines_out.join("\\\n"); // Typst `\` = explicit line-break
 
     let bg_color = typst_rgb(bg.r, bg.g, bg.b);
     let mono_font_esc = mono_font.replace('"', "\\\"");
@@ -193,11 +211,7 @@ clip: true\
 
 // ── fallback renderer ─────────────────────────────────────────────────────────
 
-fn plain_code_block(
-    code: &str,
-    mono_font: &str,
-    bg: syntect::highlighting::Color,
-) -> String {
+fn plain_code_block(code: &str, mono_font: &str, bg: syntect::highlighting::Color) -> String {
     let bg_color = typst_rgb(bg.r, bg.g, bg.b);
     let mono_font_esc = mono_font.replace('"', "\\\"");
 
@@ -226,7 +240,7 @@ fn typst_escape_string(s: &str) -> String {
     for ch in s.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
-            '"'  => out.push_str("\\\""),
+            '"' => out.push_str("\\\""),
             other => out.push(other),
         }
     }

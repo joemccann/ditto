@@ -5,16 +5,11 @@
 //! spawning any Typst compilation.
 
 use md_to_pdf::renderer::{
-    FontSet, RenderConfig, TocEntry,
-    escape_typst_text_pub as escape_typst_text,
-    extract_toc_pub as extract_toc,
-    generate_typst_toc_pub as generate_typst_toc,
-    generate_typst_toc_titled_pub as generate_typst_toc_titled,
-    heading_label_pub as heading_label,
-    latex_to_typst_pub as latex_to_typst,
-    markdown_to_typst_pub as md_to_typst,
-    stable_name_pub as stable_name,
-    typst_quoted_string_pub as typst_quoted_string,
+    FontSet, RenderConfig, TocEntry, escape_typst_text_pub as escape_typst_text,
+    extract_toc_pub as extract_toc, generate_typst_toc_pub as generate_typst_toc,
+    generate_typst_toc_titled_pub as generate_typst_toc_titled, heading_label_pub as heading_label,
+    latex_to_typst_pub as latex_to_typst, markdown_to_typst_pub as md_to_typst,
+    stable_name_pub as stable_name, typst_quoted_string_pub as typst_quoted_string,
 };
 use tempfile::TempDir;
 
@@ -131,7 +126,10 @@ fn quoted_empty_string() {
 
 #[test]
 fn quoted_font_name_spaces() {
-    assert_eq!(typst_quoted_string("Libertinus Serif"), "\"Libertinus Serif\"");
+    assert_eq!(
+        typst_quoted_string("Libertinus Serif"),
+        "\"Libertinus Serif\""
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,8 +162,10 @@ fn label_strips_typst_markup() {
 fn label_leading_digit_prefixed() {
     // Must not start with a digit
     let label = heading_label("1. Introduction");
-    assert!(!label.chars().next().unwrap().is_ascii_digit(),
-        "label should not start with digit: {label}");
+    assert!(
+        !label.chars().next().unwrap().is_ascii_digit(),
+        "label should not start with digit: {label}"
+    );
 }
 
 #[test]
@@ -306,7 +306,9 @@ fn math_bmatrix() {
 
 #[test]
 fn math_cases() {
-    let out = latex_to_typst(r"\begin{cases} x^2 & \text{if } x \geq 0 \\ -x & \text{if } x < 0 \end{cases}");
+    let out = latex_to_typst(
+        r"\begin{cases} x^2 & \text{if } x \geq 0 \\ -x & \text{if } x < 0 \end{cases}",
+    );
     assert!(out.contains("cases("), "got: {out}");
 }
 
@@ -328,7 +330,10 @@ fn math_unknown_passthrough() {
 #[test]
 fn math_escaped_braces() {
     let out = latex_to_typst(r"\{a\}");
-    assert!(out.contains('{') && out.contains('}'), "braces should appear literally: {out}");
+    assert!(
+        out.contains('{') && out.contains('}'),
+        "braces should appear literally: {out}"
+    );
 }
 
 #[test]
@@ -438,8 +443,10 @@ fn stable_name_different_inputs_different() {
 #[test]
 fn stable_name_hex_chars_only() {
     let name = stable_name("test");
-    assert!(name.chars().all(|c| c.is_ascii_hexdigit()),
-        "stable_name should be hex: {name}");
+    assert!(
+        name.chars().all(|c| c.is_ascii_hexdigit()),
+        "stable_name should be hex: {name}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -453,7 +460,10 @@ fn frontmatter_toc_true_enables_outline() {
     let config = default_config(&dir);
     // config.toc_explicit = false, so frontmatter should win
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("), "frontmatter toc:true should produce outline, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "frontmatter toc:true should produce outline, got:\n{src}"
+    );
 }
 
 #[test]
@@ -461,10 +471,13 @@ fn frontmatter_toc_false_suppresses_outline() {
     let dir = TempDir::new().unwrap();
     let md = "---\ntoc: false\n---\n# Hello\n";
     let mut config = default_config(&dir);
-    config.toc = true;          // default toc=true
+    config.toc = true; // default toc=true
     config.toc_explicit = false; // but NOT explicit → frontmatter wins
     let src = md_to_typst(md, &config).unwrap();
-    assert!(!src.contains("#outline("), "frontmatter toc:false should suppress outline, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "frontmatter toc:false should suppress outline, got:\n{src}"
+    );
 }
 
 #[test]
@@ -473,7 +486,10 @@ fn frontmatter_toc_depth_overrides_config() {
     let md = "---\ntoc: true\ntoc_depth: 2\n---\n# Hello\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("depth: 2"), "frontmatter toc_depth:2 should set depth, got:\n{src}");
+    assert!(
+        src.contains("depth: 2"),
+        "frontmatter toc_depth:2 should set depth, got:\n{src}"
+    );
 }
 
 #[test]
@@ -484,8 +500,10 @@ fn frontmatter_cli_explicit_wins_over_frontmatter() {
     config.toc = false;
     config.toc_explicit = true; // CLI flag explicitly said NO TOC
     let src = md_to_typst(md, &config).unwrap();
-    assert!(!src.contains("#outline("),
-        "explicit CLI flag should override frontmatter toc:true, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "explicit CLI flag should override frontmatter toc:true, got:\n{src}"
+    );
 }
 
 #[test]
@@ -495,7 +513,10 @@ fn frontmatter_alternate_closing_delimiter() {
     let md = "---\ntoc: true\n...\n# Hello\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("), "... delimiter should work, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "... delimiter should work, got:\n{src}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,30 +570,44 @@ fn typst_source_custom_page_size() {
 fn toc_emits_pagebreak_after_outline() {
     let toc = generate_typst_toc(3);
     // A #pagebreak() must follow the outline so body content starts on a fresh page.
-    assert!(toc.contains("#pagebreak()"), "expected #pagebreak() after outline, got:\n{toc}");
+    assert!(
+        toc.contains("#pagebreak()"),
+        "expected #pagebreak() after outline, got:\n{toc}"
+    );
 }
 
 #[test]
 fn toc_pagebreak_comes_after_outline_block() {
     let toc = generate_typst_toc(3);
     let outline_pos = toc.find("#outline(").expect("#outline() not found");
-    let break_pos   = toc.find("#pagebreak()").expect("#pagebreak() not found");
-    assert!(break_pos > outline_pos, "#pagebreak() should come after #outline()");
+    let break_pos = toc.find("#pagebreak()").expect("#pagebreak() not found");
+    assert!(
+        break_pos > outline_pos,
+        "#pagebreak() should come after #outline()"
+    );
 }
 
 #[test]
 fn toc_h1_entries_bold_via_show_rule() {
     // The `#show outline.entry.where(level: 1)` rule wraps H1 entries in strong().
     let toc = generate_typst_toc(3);
-    assert!(toc.contains("outline.entry.where(level: 1)"),
-        "expected show rule for H1 entries, got:\n{toc}");
-    assert!(toc.contains("strong("), "expected strong() in show rule, got:\n{toc}");
+    assert!(
+        toc.contains("outline.entry.where(level: 1)"),
+        "expected show rule for H1 entries, got:\n{toc}"
+    );
+    assert!(
+        toc.contains("strong("),
+        "expected strong() in show rule, got:\n{toc}"
+    );
 }
 
 #[test]
 fn toc_indent_parameter_present() {
     let toc = generate_typst_toc(3);
-    assert!(toc.contains("indent:"), "expected indent: parameter, got:\n{toc}");
+    assert!(
+        toc.contains("indent:"),
+        "expected indent: parameter, got:\n{toc}"
+    );
 }
 
 // ── Custom TOC title via generate_typst_toc_titled ───────────────────────────
@@ -580,21 +615,33 @@ fn toc_indent_parameter_present() {
 #[test]
 fn toc_custom_title_appears_in_outline() {
     let toc = generate_typst_toc_titled(3, "Contents");
-    assert!(toc.contains("Contents"), "expected custom title, got:\n{toc}");
-    assert!(!toc.contains("Table of Contents"), "should not have default title, got:\n{toc}");
+    assert!(
+        toc.contains("Contents"),
+        "expected custom title, got:\n{toc}"
+    );
+    assert!(
+        !toc.contains("Table of Contents"),
+        "should not have default title, got:\n{toc}"
+    );
 }
 
 #[test]
 fn toc_custom_title_special_chars_escaped() {
     // Typst-special chars in the title must be escaped.
     let toc = generate_typst_toc_titled(2, "My #Doc");
-    assert!(toc.contains("\\#Doc"), "hash in title should be escaped, got:\n{toc}");
+    assert!(
+        toc.contains("\\#Doc"),
+        "hash in title should be escaped, got:\n{toc}"
+    );
 }
 
 #[test]
 fn toc_default_title_is_table_of_contents() {
     let toc = generate_typst_toc(2);
-    assert!(toc.contains("Table of Contents"), "default title should be 'Table of Contents', got:\n{toc}");
+    assert!(
+        toc.contains("Table of Contents"),
+        "default title should be 'Table of Contents', got:\n{toc}"
+    );
 }
 
 // ── `toc_title` frontmatter key ───────────────────────────────────────────────
@@ -605,8 +652,14 @@ fn frontmatter_toc_title_overrides_default() {
     let md = "---\ntoc: true\ntoc_title: My Document Index\n---\n# Hello\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("My Document Index"), "expected custom toc_title, got:\n{src}");
-    assert!(!src.contains("Table of Contents"), "should not use default title, got:\n{src}");
+    assert!(
+        src.contains("My Document Index"),
+        "expected custom toc_title, got:\n{src}"
+    );
+    assert!(
+        !src.contains("Table of Contents"),
+        "should not use default title, got:\n{src}"
+    );
 }
 
 #[test]
@@ -616,7 +669,10 @@ fn frontmatter_toc_title_quoted_value() {
     let md = "---\ntoc: true\ntoc_title: \"My Index\"\n---\n# Hello\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("My Index"), "expected unquoted title in output, got:\n{src}");
+    assert!(
+        src.contains("My Index"),
+        "expected unquoted title in output, got:\n{src}"
+    );
 }
 
 #[test]
@@ -628,7 +684,10 @@ fn frontmatter_toc_title_without_toc_has_no_effect() {
     config.toc = false;
     config.toc_explicit = true;
     let src = md_to_typst(md, &config).unwrap();
-    assert!(!src.contains("#outline("), "no TOC should be emitted, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "no TOC should be emitted, got:\n{src}"
+    );
 }
 
 // ── `no_toc` frontmatter key ──────────────────────────────────────────────────
@@ -638,11 +697,13 @@ fn frontmatter_no_toc_true_suppresses_outline() {
     let dir = TempDir::new().unwrap();
     let md = "---\nno_toc: true\n---\n# Hello\n";
     let mut config = default_config(&dir);
-    config.toc = true;          // default would emit TOC
+    config.toc = true; // default would emit TOC
     config.toc_explicit = false; // but not explicit → frontmatter wins
     let src = md_to_typst(md, &config).unwrap();
-    assert!(!src.contains("#outline("),
-        "no_toc: true should suppress outline, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "no_toc: true should suppress outline, got:\n{src}"
+    );
 }
 
 #[test]
@@ -651,8 +712,10 @@ fn frontmatter_no_toc_false_does_not_suppress() {
     let md = "---\ntoc: true\nno_toc: false\n---\n# Hello\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("),
-        "no_toc: false should not suppress outline, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "no_toc: false should not suppress outline, got:\n{src}"
+    );
 }
 
 #[test]
@@ -663,8 +726,10 @@ fn frontmatter_no_toc_and_toc_both_true_no_toc_wins() {
     let mut config = default_config(&dir);
     config.toc_explicit = false;
     let src = md_to_typst(md, &config).unwrap();
-    assert!(!src.contains("#outline("),
-        "no_toc: true should override toc: true, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "no_toc: true should override toc: true, got:\n{src}"
+    );
 }
 
 #[test]
@@ -676,8 +741,10 @@ fn frontmatter_no_toc_cli_explicit_still_wins() {
     config.toc = true;
     config.toc_explicit = true; // CLI said YES → wins over frontmatter
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("),
-        "CLI explicit --toc should override frontmatter no_toc: true, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "CLI explicit --toc should override frontmatter no_toc: true, got:\n{src}"
+    );
 }
 
 // ── Duplicate heading label disambiguation ────────────────────────────────────
@@ -689,12 +756,21 @@ fn duplicate_headings_get_unique_labels() {
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
     // First occurrence: <overview>
-    assert!(src.contains("<overview>"), "first label should be <overview>, got:\n{src}");
+    assert!(
+        src.contains("<overview>"),
+        "first label should be <overview>, got:\n{src}"
+    );
     // Second occurrence: <overview-2>
-    assert!(src.contains("<overview-2>"), "second label should be <overview-2>, got:\n{src}");
+    assert!(
+        src.contains("<overview-2>"),
+        "second label should be <overview-2>, got:\n{src}"
+    );
     // Should NOT have two <overview> labels (that would be invalid Typst)
     let count = src.matches("<overview>").count();
-    assert_eq!(count, 1, "base label <overview> should appear exactly once, got:\n{src}");
+    assert_eq!(
+        count, 1,
+        "base label <overview> should appear exactly once, got:\n{src}"
+    );
 }
 
 #[test]
@@ -730,9 +806,15 @@ fn mixed_levels_duplicate_labels_disambiguated() {
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
     assert!(src.contains("<summary>"), "first: <summary>, got:\n{src}");
-    assert!(src.contains("<summary-2>"), "second: <summary-2>, got:\n{src}");
+    assert!(
+        src.contains("<summary-2>"),
+        "second: <summary-2>, got:\n{src}"
+    );
     let count = src.matches("<summary>").count();
-    assert_eq!(count, 1, "base <summary> should appear exactly once, got:\n{src}");
+    assert_eq!(
+        count, 1,
+        "base <summary> should appear exactly once, got:\n{src}"
+    );
 }
 
 // ── Internal clickable navigation (labels on headings) ────────────────────────
@@ -744,9 +826,18 @@ fn every_heading_has_a_label() {
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
     // Each heading line should be followed by a <label>
-    assert!(src.contains("= First <first>"), "H1 label missing, got:\n{src}");
-    assert!(src.contains("== Second <second>"), "H2 label missing, got:\n{src}");
-    assert!(src.contains("=== Third <third>"), "H3 label missing, got:\n{src}");
+    assert!(
+        src.contains("= First <first>"),
+        "H1 label missing, got:\n{src}"
+    );
+    assert!(
+        src.contains("== Second <second>"),
+        "H2 label missing, got:\n{src}"
+    );
+    assert!(
+        src.contains("=== Third <third>"),
+        "H3 label missing, got:\n{src}"
+    );
 }
 
 #[test]
@@ -760,11 +851,23 @@ fn toc_with_headings_uses_outline_for_clickable_nav() {
     config.toc_explicit = true;
     config.toc_depth = 2;
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("), "outline should be emitted, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "outline should be emitted, got:\n{src}"
+    );
     // Labels must be present for clickable links to work
-    assert!(src.contains("<chapter-one>"), "heading label missing, got:\n{src}");
-    assert!(src.contains("<section-a>"), "heading label missing, got:\n{src}");
-    assert!(src.contains("<section-b>"), "heading label missing, got:\n{src}");
+    assert!(
+        src.contains("<chapter-one>"),
+        "heading label missing, got:\n{src}"
+    );
+    assert!(
+        src.contains("<section-a>"),
+        "heading label missing, got:\n{src}"
+    );
+    assert!(
+        src.contains("<section-b>"),
+        "heading label missing, got:\n{src}"
+    );
 }
 
 // ── TOC depth controls which headings appear ──────────────────────────────────
@@ -810,8 +913,14 @@ fn toc_enabled_via_frontmatter_emits_outline_and_pagebreak() {
     let md = "---\ntoc: true\ntoc_depth: 2\n---\n# Hello\n## World\n";
     let config = default_config(&dir);
     let src = md_to_typst(md, &config).unwrap();
-    assert!(src.contains("#outline("), "should emit outline, got:\n{src}");
-    assert!(src.contains("#pagebreak()"), "should emit pagebreak after outline, got:\n{src}");
+    assert!(
+        src.contains("#outline("),
+        "should emit outline, got:\n{src}"
+    );
+    assert!(
+        src.contains("#pagebreak()"),
+        "should emit pagebreak after outline, got:\n{src}"
+    );
     assert!(src.contains("depth: 2"), "should use depth 2, got:\n{src}");
 }
 
@@ -822,8 +931,14 @@ fn toc_disabled_no_outline_no_pagebreak() {
     config.toc = false;
     config.toc_explicit = true;
     let src = md_to_typst("# Hello\n## World\n", &config).unwrap();
-    assert!(!src.contains("#outline("), "should not emit outline, got:\n{src}");
-    assert!(!src.contains("#pagebreak()"), "should not emit pagebreak, got:\n{src}");
+    assert!(
+        !src.contains("#outline("),
+        "should not emit outline, got:\n{src}"
+    );
+    assert!(
+        !src.contains("#pagebreak()"),
+        "should not emit pagebreak, got:\n{src}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -906,7 +1021,10 @@ fn quoted_string_with_at_sign_not_escaped() {
 fn quoted_string_with_newline() {
     // Newlines inside a string literal are literal characters
     let out = typst_quoted_string("line1\nline2");
-    assert!(out.starts_with('"') && out.ends_with('"'), "wrapped in quotes: {out}");
+    assert!(
+        out.starts_with('"') && out.ends_with('"'),
+        "wrapped in quotes: {out}"
+    );
 }
 
 #[test]
@@ -929,8 +1047,10 @@ fn quoted_string_hash_not_escaped() {
 #[test]
 fn label_only_digits_gets_prefix() {
     let label = heading_label("123");
-    assert!(label.starts_with('h') || !label.chars().next().unwrap().is_ascii_digit(),
-        "label starting with digit: {label}");
+    assert!(
+        label.starts_with('h') || !label.chars().next().unwrap().is_ascii_digit(),
+        "label starting with digit: {label}"
+    );
 }
 
 #[test]
@@ -1114,7 +1234,10 @@ fn math_iint_iiint() {
 #[test]
 fn math_vmatrix() {
     let out = latex_to_typst(r"\begin{vmatrix} a & b \\ c & d \end{vmatrix}");
-    assert!(out.contains("mat(delim: \"|\",") || out.contains("mat(delim:\"|\""), "got: {out}");
+    assert!(
+        out.contains("mat(delim: \"|\",") || out.contains("mat(delim:\"|\""),
+        "got: {out}"
+    );
 }
 
 #[test]
@@ -1127,7 +1250,10 @@ fn math_align_env() {
 #[test]
 fn math_equation_env() {
     let out = latex_to_typst(r"\begin{equation} x^2 + y^2 = r^2 \end{equation}");
-    assert!(out.contains("x") && out.contains("y") && out.contains("r"), "got: {out}");
+    assert!(
+        out.contains("x") && out.contains("y") && out.contains("r"),
+        "got: {out}"
+    );
 }
 
 #[test]
@@ -1215,7 +1341,11 @@ fn toc_title_with_inline_markup() {
     let md = "## **Bold** Section\n";
     let entries = extract_toc(md);
     assert_eq!(entries.len(), 1);
-    assert!(entries[0].title.contains("Bold"), "got: {}", entries[0].title);
+    assert!(
+        entries[0].title.contains("Bold"),
+        "got: {}",
+        entries[0].title
+    );
 }
 
 #[test]
@@ -1224,8 +1354,16 @@ fn toc_7_or_more_hashes_not_heading() {
     let md = "####### Too many\n# Valid\n";
     let entries = extract_toc(md);
     // Only "Valid" should be captured; "Too many" has 7 hashes and is not a heading
-    assert!(entries.iter().any(|e| e.title == "Valid"), "valid heading: {:?}", entries);
-    assert!(!entries.iter().any(|e| e.title == "Too many"), "invalid heading should be absent: {:?}", entries);
+    assert!(
+        entries.iter().any(|e| e.title == "Valid"),
+        "valid heading: {:?}",
+        entries
+    );
+    assert!(
+        !entries.iter().any(|e| e.title == "Too many"),
+        "invalid heading should be absent: {:?}",
+        entries
+    );
 }
 
 #[test]
@@ -1306,7 +1444,10 @@ fn md_blockquote_structure() {
     let dir = TempDir::new().unwrap();
     let src = md_to_typst("> A quote.\n", &default_config(&dir)).unwrap();
     assert!(src.contains("#block("), "block: {src}");
-    assert!(src.contains("inset: (left: 12pt)") || src.contains("inset"), "inset: {src}");
+    assert!(
+        src.contains("inset: (left: 12pt)") || src.contains("inset"),
+        "inset: {src}"
+    );
     assert!(src.contains("stroke"), "stroke: {src}");
     assert!(src.contains("A quote."), "content: {src}");
 }
@@ -1323,7 +1464,10 @@ fn md_soft_break_becomes_space() {
     // A soft break (single newline within a paragraph) should become a space
     let dir = TempDir::new().unwrap();
     let src = md_to_typst("word1\nword2\n", &default_config(&dir)).unwrap();
-    assert!(src.contains("word1") && src.contains("word2"), "words present: {src}");
+    assert!(
+        src.contains("word1") && src.contains("word2"),
+        "words present: {src}"
+    );
 }
 
 #[test]
@@ -1361,7 +1505,11 @@ fn md_table_single_column() {
 #[test]
 fn md_table_five_columns() {
     let dir = TempDir::new().unwrap();
-    let src = md_to_typst("| A | B | C | D | E |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |\n", &default_config(&dir)).unwrap();
+    let src = md_to_typst(
+        "| A | B | C | D | E |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |\n",
+        &default_config(&dir),
+    )
+    .unwrap();
     assert!(src.contains("#table("), "table: {src}");
     let count = src.matches("1fr").count();
     assert_eq!(count, 5, "five columns: {src}");
@@ -1372,8 +1520,14 @@ fn md_code_block_math_lang_no_code_block() {
     // A ```math ... ``` fenced block must produce display math, not a code block
     let dir = TempDir::new().unwrap();
     let src = md_to_typst("```math\nE = mc^2\n```\n", &default_config(&dir)).unwrap();
-    assert!(!src.contains("#block(fill:"), "should not be code block: {src}");
-    assert!(src.contains("$ ") && src.contains(" $"), "should be display math: {src}");
+    assert!(
+        !src.contains("#block(fill:"),
+        "should not be code block: {src}"
+    );
+    assert!(
+        src.contains("$ ") && src.contains(" $"),
+        "should be display math: {src}"
+    );
 }
 
 #[test]
@@ -1382,7 +1536,10 @@ fn md_description_list_term_and_detail() {
     let src = md_to_typst("Apple\n: A fruit.\n", &default_config(&dir)).unwrap();
     assert!(src.contains("#strong[Apple]"), "term bold: {src}");
     assert!(src.contains("A fruit."), "detail: {src}");
-    assert!(src.contains("#pad(left:") || src.contains("pad(left:"), "padded: {src}");
+    assert!(
+        src.contains("#pad(left:") || src.contains("pad(left:"),
+        "padded: {src}"
+    );
 }
 
 #[test]
@@ -1391,7 +1548,10 @@ fn md_frontmatter_yes_value_enables_toc() {
     let dir = TempDir::new().unwrap();
     let md = "---\ntoc: yes\n---\n# Hello\n";
     let src = md_to_typst(md, &default_config(&dir)).unwrap();
-    assert!(src.contains("#outline("), "toc:yes should enable outline: {src}");
+    assert!(
+        src.contains("#outline("),
+        "toc:yes should enable outline: {src}"
+    );
 }
 
 #[test]
@@ -1400,7 +1560,10 @@ fn md_frontmatter_1_value_enables_toc() {
     let dir = TempDir::new().unwrap();
     let md = "---\ntoc: 1\n---\n# Hello\n";
     let src = md_to_typst(md, &default_config(&dir)).unwrap();
-    assert!(src.contains("#outline("), "toc:1 should enable outline: {src}");
+    assert!(
+        src.contains("#outline("),
+        "toc:1 should enable outline: {src}"
+    );
 }
 
 #[test]
@@ -1441,7 +1604,10 @@ fn md_inline_html_br_tag() {
     let dir = TempDir::new().unwrap();
     let src = md_to_typst("Line one<br>Line two\n", &default_config(&dir)).unwrap();
     // <br> → \\\n in Typst
-    assert!(src.contains("\\\\\n") || src.contains("\\\n"), "line break: {src}");
+    assert!(
+        src.contains("\\\\\n") || src.contains("\\\n"),
+        "line break: {src}"
+    );
 }
 
 #[test]
@@ -1458,19 +1624,31 @@ fn md_multiple_blockquotes_all_present() {
 #[test]
 fn md_ordered_list_mixed_with_unordered() {
     let dir = TempDir::new().unwrap();
-    let src = md_to_typst("- Bullet A\n  1. Num one\n  2. Num two\n- Bullet B\n",
-                           &default_config(&dir)).unwrap();
+    let src = md_to_typst(
+        "- Bullet A\n  1. Num one\n  2. Num two\n- Bullet B\n",
+        &default_config(&dir),
+    )
+    .unwrap();
     assert!(src.contains("- Bullet A"), "bullet A: {src}");
     assert!(src.contains("- Bullet B"), "bullet B: {src}");
-    assert!(src.contains("+ Num one") || src.contains("Num one"), "num one: {src}");
-    assert!(src.contains("+ Num two") || src.contains("Num two"), "num two: {src}");
+    assert!(
+        src.contains("+ Num one") || src.contains("Num one"),
+        "num one: {src}"
+    );
+    assert!(
+        src.contains("+ Num two") || src.contains("Num two"),
+        "num two: {src}"
+    );
 }
 
 #[test]
 fn md_footnote_with_inline_formatting() {
     let dir = TempDir::new().unwrap();
-    let src = md_to_typst("Ref[^fn].\n\n[^fn]: Note with **bold** inside.\n",
-                           &default_config(&dir)).unwrap();
+    let src = md_to_typst(
+        "Ref[^fn].\n\n[^fn]: Note with **bold** inside.\n",
+        &default_config(&dir),
+    )
+    .unwrap();
     assert!(src.contains("#super["), "superscript: {src}");
     assert!(src.contains("#strong[bold]"), "bold in footnote: {src}");
 }
@@ -1486,8 +1664,11 @@ fn md_no_crash_on_empty_table() {
 #[test]
 fn md_task_list_in_nested_context() {
     let dir = TempDir::new().unwrap();
-    let src = md_to_typst("- Parent\n  - [x] Child done\n  - [ ] Child pending\n",
-                           &default_config(&dir)).unwrap();
+    let src = md_to_typst(
+        "- Parent\n  - [x] Child done\n  - [ ] Child pending\n",
+        &default_config(&dir),
+    )
+    .unwrap();
     assert!(src.contains("☑"), "checked: {src}");
     assert!(src.contains("☐"), "unchecked: {src}");
 }

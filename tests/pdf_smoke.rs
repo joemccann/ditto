@@ -39,8 +39,8 @@ fn smoke_config(dir: &TempDir) -> RenderConfig {
 
 /// Assert the file at `path` is a valid PDF (≥ 4 bytes, starts with `%PDF`).
 fn assert_is_pdf(path: &std::path::Path) {
-    let bytes = std::fs::read(path)
-        .unwrap_or_else(|_| panic!("PDF file not found: {}", path.display()));
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|_| panic!("PDF file not found: {}", path.display()));
     assert!(
         bytes.len() > 4,
         "PDF too small ({} bytes): {}",
@@ -66,7 +66,11 @@ fn smoke_minimal_document() {
     let summary = render_markdown_to_pdf("Hello, world!\n", &out, smoke_config(&dir))
         .expect("render should succeed");
     assert_is_pdf(&out);
-    assert!(summary.pages >= 1, "expected at least 1 page, got {}", summary.pages);
+    assert!(
+        summary.pages >= 1,
+        "expected at least 1 page, got {}",
+        summary.pages
+    );
 }
 
 #[test]
@@ -74,13 +78,17 @@ fn smoke_all_headings() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n\nSome content.\n";
-    let summary = render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("render should succeed");
+    let summary =
+        render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("render should succeed");
     assert_is_pdf(&out);
     assert!(summary.pages >= 1);
     // Should have extracted 6 TOC entries
-    assert_eq!(summary.toc_entries.len(), 6,
-        "expected 6 TOC entries, got {}", summary.toc_entries.len());
+    assert_eq!(
+        summary.toc_entries.len(),
+        6,
+        "expected 6 TOC entries, got {}",
+        summary.toc_entries.len()
+    );
 }
 
 #[test]
@@ -88,8 +96,8 @@ fn smoke_bullet_list() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "- Alpha\n- Beta\n  - Nested\n- Gamma\n";
-    let summary = render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("render should succeed");
+    let summary =
+        render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("render should succeed");
     assert_is_pdf(&out);
     assert!(summary.pages >= 1);
 }
@@ -208,7 +216,8 @@ fn smoke_blockquote() {
 fn smoke_footnotes() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
-    let md = "First[^1] and second[^2] references.\n\n[^1]: First footnote.\n\n[^2]: Second footnote.\n";
+    let md =
+        "First[^1] and second[^2] references.\n\n[^1]: First footnote.\n\n[^2]: Second footnote.\n";
     render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("render should succeed");
     assert_is_pdf(&out);
 }
@@ -225,7 +234,11 @@ fn smoke_with_toc() {
     let summary = render_markdown_to_pdf(md, &out, config).expect("render should succeed");
     assert_is_pdf(&out);
     // TOC + body = at least 2 pages (TOC page + content page)
-    assert!(summary.pages >= 2, "expected at least 2 pages with TOC, got {}", summary.pages);
+    assert!(
+        summary.pages >= 2,
+        "expected at least 2 pages with TOC, got {}",
+        summary.pages
+    );
 }
 
 #[test]
@@ -260,7 +273,8 @@ fn smoke_toc_duplicate_headings() {
     // (duplicate label disambiguation must produce valid Typst).
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
-    let md = "# Overview\n\nFirst.\n\n# Overview\n\nSecond.\n\n## Details\n\nA.\n\n## Details\n\nB.\n";
+    let md =
+        "# Overview\n\nFirst.\n\n# Overview\n\nSecond.\n\n## Details\n\nA.\n\n## Details\n\nB.\n";
     let mut config = smoke_config(&dir);
     config.toc = true;
     config.toc_explicit = true;
@@ -327,8 +341,12 @@ fn smoke_slides_preset() {
     config.page_height_mm = 190.0;
     config.margin_mm = 12.0;
     config.base_font_size_pt = 20.0;
-    render_markdown_to_pdf("# Slide Title\n\n- Bullet one\n- Bullet two\n", &out, config)
-        .expect("render should succeed");
+    render_markdown_to_pdf(
+        "# Slide Title\n\n- Bullet one\n- Bullet two\n",
+        &out,
+        config,
+    )
+    .expect("render should succeed");
     assert_is_pdf(&out);
 }
 
@@ -404,7 +422,8 @@ fn smoke_dollar_sign_in_text_does_not_crash() {
     // Regression: a bare `$` in text (e.g. "$9.99") must be escaped as `\$`
     // so Typst doesn't interpret it as an unclosed math delimiter.
     let dir = TempDir::new().unwrap();
-    let md = "# Pricing\n\nBuy now for only $9.99 — or two for $18!\n\nAlso: \\$escaped and plain $$.";
+    let md =
+        "# Pricing\n\nBuy now for only $9.99 — or two for $18!\n\nAlso: \\$escaped and plain $$.";
     let out = dir.path().join("out.pdf");
     render_markdown_to_pdf(md, &out, smoke_config(&dir))
         .expect("dollar signs in plain text should not crash");
@@ -420,8 +439,7 @@ fn smoke_ocean_dark_theme() {
     let out = dir.path().join("out.pdf");
     let mut config = smoke_config(&dir);
     config.syntax_theme = "base16-ocean.dark".to_string();
-    render_markdown_to_pdf(md, &out, config)
-        .expect("ocean dark theme should work");
+    render_markdown_to_pdf(md, &out, config).expect("ocean dark theme should work");
     assert_is_pdf(&out);
 }
 
@@ -450,8 +468,7 @@ fn smoke_fixture_comprehensive_gfm() {
     let mut config = smoke_config(&dir);
     config.toc = false;
     config.toc_explicit = false;
-    render_markdown_to_pdf(&md, &out, config)
-        .expect("comprehensive_gfm smoke should succeed");
+    render_markdown_to_pdf(&md, &out, config).expect("comprehensive_gfm smoke should succeed");
     assert_is_pdf(&out);
 }
 
@@ -566,12 +583,18 @@ fn smoke_long_document_multi_page() {
         md.push_str("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ");
         md.push_str("Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ");
         md.push_str("Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\n");
-        md.push_str(&format!("- Item A in section {i}\n- Item B in section {i}\n- Item C in section {i}\n\n"));
+        md.push_str(&format!(
+            "- Item A in section {i}\n- Item B in section {i}\n- Item C in section {i}\n\n"
+        ));
     }
-    let summary = render_markdown_to_pdf(&md, &out, smoke_config(&dir))
-        .expect("long document smoke");
+    let summary =
+        render_markdown_to_pdf(&md, &out, smoke_config(&dir)).expect("long document smoke");
     assert_is_pdf(&out);
-    assert!(summary.pages >= 2, "long doc should span multiple pages: {} pages", summary.pages);
+    assert!(
+        summary.pages >= 2,
+        "long doc should span multiple pages: {} pages",
+        summary.pages
+    );
 }
 
 #[test]
@@ -590,11 +613,14 @@ fn smoke_document_with_all_gfm_features() {
               ## Definition List\n\nTerm\n: Definition.\n\n\
               ## Autolink\n\nhttps://example.com\n\n\
               ## Blockquote\n\n> A quoted line.\n";
-    let summary = render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("all GFM features smoke");
+    let summary =
+        render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("all GFM features smoke");
     assert_is_pdf(&out);
     assert!(summary.pages >= 1);
-    assert!(summary.toc_entries.len() >= 9, "all section headings extracted");
+    assert!(
+        summary.toc_entries.len() >= 9,
+        "all section headings extracted"
+    );
 }
 
 #[test]
@@ -619,8 +645,7 @@ fn smoke_special_chars_throughout() {
     let md = "# Prices and Tags\n\nCost: $9.99 per unit.\n\nTag: #1 on the charts.\n\n\
               ## Code\n\n```python\nprice = \"$9.99\"  # USD\ncount = 42\n```\n\n\
               ## Backslashes\n\nPath: `C:\\Users\\name`.\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("special chars smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("special chars smoke");
     assert_is_pdf(&out);
 }
 
@@ -635,8 +660,7 @@ fn smoke_toc_with_comprehensive_sections() {
     config.toc = true;
     config.toc_explicit = true;
     config.toc_depth = 3;
-    let summary = render_markdown_to_pdf(md, &out, config)
-        .expect("TOC comprehensive smoke");
+    let summary = render_markdown_to_pdf(md, &out, config).expect("TOC comprehensive smoke");
     assert_is_pdf(&out);
     assert!(summary.pages >= 2, "TOC + content: {} pages", summary.pages);
 }
@@ -652,8 +676,7 @@ fn smoke_a3_preset() {
     let mut config = smoke_config(&dir);
     config.page_width_mm = 297.0;
     config.page_height_mm = 420.0;
-    render_markdown_to_pdf("# A3 Document\n\nContent.\n", &out, config)
-        .expect("A3 smoke");
+    render_markdown_to_pdf("# A3 Document\n\nContent.\n", &out, config).expect("A3 smoke");
     assert_is_pdf(&out);
 }
 
@@ -727,8 +750,7 @@ fn smoke_regression_at_sign_in_text() {
     let out = dir.path().join("out.pdf");
     let md = "Contact user@example.com or admin@test.org.\n\n\
               Also: <user@example.com> as an autolink.\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("@ in text smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("@ in text smoke");
     assert_is_pdf(&out);
 }
 
@@ -737,8 +759,7 @@ fn smoke_regression_empty_code_block() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "```\n```\n\nText after.\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("empty code block smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("empty code block smoke");
     assert_is_pdf(&out);
 }
 
@@ -747,8 +768,7 @@ fn smoke_regression_consecutive_headings() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n# H1 Again\n## H2 Again\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("consecutive headings smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("consecutive headings smoke");
     assert_is_pdf(&out);
 }
 
@@ -758,8 +778,7 @@ fn smoke_regression_no_content_footnote() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "Word[^f].\n\n[^f]: Short.\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("short footnote smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("short footnote smoke");
     assert_is_pdf(&out);
 }
 
@@ -768,8 +787,7 @@ fn smoke_regression_fenced_math_block() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "# Fenced Math\n\n```math\nm c^2\n```\n\n```math\n\\int_0^1 x^2 = \\frac{1}{3}\n```\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("fenced math smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("fenced math smoke");
     assert_is_pdf(&out);
 }
 
@@ -778,8 +796,7 @@ fn smoke_regression_table_single_row() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("out.pdf");
     let md = "| Name | Value |\n|------|-------|\n| Only | row |\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("single-row table smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("single-row table smoke");
     assert_is_pdf(&out);
 }
 
@@ -792,7 +809,6 @@ fn smoke_regression_image_missing_renders_pdf() {
               Some text between images.\n\n\
               ![Second missing](b.png)\n\n\
               More text after.\n";
-    render_markdown_to_pdf(md, &out, smoke_config(&dir))
-        .expect("multiple missing images smoke");
+    render_markdown_to_pdf(md, &out, smoke_config(&dir)).expect("multiple missing images smoke");
     assert_is_pdf(&out);
 }

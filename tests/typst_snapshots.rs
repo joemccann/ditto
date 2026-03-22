@@ -44,8 +44,7 @@ fn snapshot(name: &str, md: &str) -> String {
     let dir = TempDir::new().unwrap();
     let src = md_to_typst(md, &cfg(&dir)).unwrap();
 
-    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/snapshots");
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snapshots");
     std::fs::create_dir_all(&snap_dir).ok();
     let snap_path: PathBuf = snap_dir.join(format!("{}.typ", name));
 
@@ -73,7 +72,10 @@ fn snapshot(name: &str, md: &str) -> String {
 
 #[test]
 fn snapshot_heading_hierarchy() {
-    let src = snapshot("heading_hierarchy", "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n");
+    let src = snapshot(
+        "heading_hierarchy",
+        "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n",
+    );
     // Verify shape
     assert!(src.contains("= H1"));
     assert!(src.contains("====== H6"));
@@ -118,7 +120,10 @@ fn snapshot_blockquote() {
 
 #[test]
 fn snapshot_table_basic() {
-    let src = snapshot("table_basic", "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n");
+    let src = snapshot(
+        "table_basic",
+        "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n",
+    );
     assert!(src.contains("#table("));
     assert!(src.contains("Alice"));
     assert!(src.contains("Bob"));
@@ -216,8 +221,7 @@ fn snapshot_toc_enabled() {
     let src = md_to_typst("# H1\n## H2\n", &config).unwrap();
 
     // Write snapshot manually (not using the helper since we need a custom config)
-    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/snapshots");
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snapshots");
     std::fs::create_dir_all(&snap_dir).ok();
     let snap_path = snap_dir.join("toc_enabled.typ");
     if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !snap_path.exists() {
@@ -238,8 +242,7 @@ fn snapshot_page_header() {
     config.base_font_size_pt = 14.0;
     let src = md_to_typst("Slides content\n", &config).unwrap();
 
-    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/snapshots");
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snapshots");
     std::fs::create_dir_all(&snap_dir).ok();
     let snap_path = snap_dir.join("page_header_slides.typ");
     if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !snap_path.exists() {
@@ -262,7 +265,10 @@ fn snapshot_missing_image_fallback() {
 
 #[test]
 fn snapshot_inline_html_strong() {
-    let src = snapshot("inline_html_strong", "Text <strong>bold via HTML</strong> text.\n");
+    let src = snapshot(
+        "inline_html_strong",
+        "Text <strong>bold via HTML</strong> text.\n",
+    );
     assert!(src.contains("#strong["));
     assert!(src.contains("bold via HTML"));
 }
@@ -291,7 +297,10 @@ fn snapshot_nested_bullet_list() {
     // Third-level items use 4-space indent
     assert!(src.contains("    - Deep C"), "deep item missing: {src}");
     // No spurious blank lines between item and its nested list
-    assert!(!src.contains("Top A\n\n  - Nested"), "blank line between item and nested list: {src}");
+    assert!(
+        !src.contains("Top A\n\n  - Nested"),
+        "blank line between item and nested list: {src}"
+    );
 }
 
 #[test]
@@ -303,7 +312,10 @@ fn snapshot_nested_ordered_list() {
     assert!(src.contains("+ First"), "first item: {src}");
     assert!(src.contains("+ Second"), "second item: {src}");
     // Nested ordered items use 3-space indent (matching the `   1.` prefix)
-    assert!(src.contains("  + Sub one") || src.contains("   + Sub one"), "nested sub-item: {src}");
+    assert!(
+        src.contains("  + Sub one") || src.contains("   + Sub one"),
+        "nested sub-item: {src}"
+    );
     assert!(src.contains("+ Third"), "third item: {src}");
 }
 
@@ -361,17 +373,20 @@ fn snapshot_table_alignment_markers() {
     assert!(src.contains("align: center"), "center align: {src}");
     assert!(src.contains("align: right"), "right align: {src}");
     // Data cells are NOT wrapped in #strong
-    assert!(!src.contains("#strong[Alice]"), "data cells should not be bold: {src}");
+    assert!(
+        !src.contains("#strong[Alice]"),
+        "data cells should not be bold: {src}"
+    );
 }
 
 #[test]
 fn snapshot_autolink_bare_url() {
-    let src = snapshot(
-        "autolink_bare_url",
-        "Visit https://example.com for more.\n",
-    );
+    let src = snapshot("autolink_bare_url", "Visit https://example.com for more.\n");
     // Bare URLs parsed by autolink extension → compact #link("url")
-    assert!(src.contains("#link(\"https://example.com\")"), "bare URL autolink: {src}");
+    assert!(
+        src.contains("#link(\"https://example.com\")"),
+        "bare URL autolink: {src}"
+    );
 }
 
 #[test]
@@ -386,14 +401,17 @@ fn snapshot_autolink_angle_bracket() {
 
 #[test]
 fn snapshot_autolink_email() {
-    let src = snapshot(
-        "autolink_email",
-        "Contact <user@example.com>.\n",
-    );
+    let src = snapshot("autolink_email", "Contact <user@example.com>.\n");
     // Email autolinks become mailto: links
-    assert!(src.contains("mailto:user@example.com"), "mailto link: {src}");
+    assert!(
+        src.contains("mailto:user@example.com"),
+        "mailto link: {src}"
+    );
     // The @ in the display label must be escaped for Typst
-    assert!(src.contains("user\\@example.com"), "escaped @ in label: {src}");
+    assert!(
+        src.contains("user\\@example.com"),
+        "escaped @ in label: {src}"
+    );
 }
 
 #[test]
@@ -405,16 +423,26 @@ fn snapshot_footnote_ordering() {
          [^a]: Alpha definition.\n",
     );
     // Footnote section separator must be present
-    assert!(src.contains("#line(length: 100%)"), "footnote separator: {src}");
+    assert!(
+        src.contains("#line(length: 100%)"),
+        "footnote separator: {src}"
+    );
     // [^a] appears first in the text → ix=1; [^b] appears second → ix=2
     // So Alpha definition should be listed as #super[1] and Beta as #super[2]
-    let super1_pos = src.find("#super[1] Alpha definition").or_else(|| src.find("#super[1]"));
-    let super2_pos = src.find("#super[2] Beta definition").or_else(|| src.find("#super[2]"));
+    let super1_pos = src
+        .find("#super[1] Alpha definition")
+        .or_else(|| src.find("#super[1]"));
+    let super2_pos = src
+        .find("#super[2] Beta definition")
+        .or_else(|| src.find("#super[2]"));
     assert!(super1_pos.is_some(), "super[1] missing: {src}");
     assert!(super2_pos.is_some(), "super[2] missing: {src}");
     // The [^a] footnote (first referenced) should appear before [^b]
     if let (Some(p1), Some(p2)) = (super1_pos, super2_pos) {
-        assert!(p1 < p2, "#super[1] should come before #super[2] in output: {src}");
+        assert!(
+            p1 < p2,
+            "#super[1] should come before #super[2] in output: {src}"
+        );
     }
 }
 
@@ -429,7 +457,10 @@ fn snapshot_definition_list_multiple_details() {
     assert!(src.contains("Second detail."), "second detail: {src}");
     // Both details should be padded
     let pad_count = src.matches("#pad(left: 1.5em)").count();
-    assert!(pad_count >= 2, "expected 2 padded details, got {pad_count}: {src}");
+    assert!(
+        pad_count >= 2,
+        "expected 2 padded details, got {pad_count}: {src}"
+    );
 }
 
 #[test]
@@ -452,8 +483,7 @@ fn snapshot_gfm_fixture() {
     let src = md_to_typst(&md, &cfg(&dir)).unwrap();
 
     // Write as a snapshot file
-    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/snapshots");
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snapshots");
     std::fs::create_dir_all(&snap_dir).ok();
     let snap_path = snap_dir.join("gfm_fixture.typ");
     if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !snap_path.exists() {
@@ -462,18 +492,36 @@ fn snapshot_gfm_fixture() {
 
     // GFM fixture structural checks
     assert!(src.contains("- Top-level item A"), "bullet list: {src}");
-    assert!(src.contains("  - Second-level item B"), "nested bullet: {src}");
-    assert!(src.contains("    - Third-level item C"), "deep nested bullet: {src}");
+    assert!(
+        src.contains("  - Second-level item B"),
+        "nested bullet: {src}"
+    );
+    assert!(
+        src.contains("    - Third-level item C"),
+        "deep nested bullet: {src}"
+    );
     assert!(src.contains("#box(width: 1em)[☑]"), "task checked: {src}");
     assert!(src.contains("#box(width: 1em)[☐]"), "task unchecked: {src}");
     assert!(src.contains("align: left"), "table align left: {src}");
     assert!(src.contains("align: center"), "table align center: {src}");
     assert!(src.contains("align: right"), "table align right: {src}");
     assert!(src.contains("#link("), "autolink: {src}");
-    assert!(src.contains("#super[1]") || src.contains("#super["), "footnote ref: {src}");
-    assert!(src.contains("#line(length: 100%)"), "footnote separator: {src}");
-    assert!(src.contains("#strong[Markdown]") || src.contains("Markdown"), "def list term: {src}");
-    assert!(src.contains("#pad(left: 1.5em)"), "def list detail padded: {src}");
+    assert!(
+        src.contains("#super[1]") || src.contains("#super["),
+        "footnote ref: {src}"
+    );
+    assert!(
+        src.contains("#line(length: 100%)"),
+        "footnote separator: {src}"
+    );
+    assert!(
+        src.contains("#strong[Markdown]") || src.contains("Markdown"),
+        "def list term: {src}"
+    );
+    assert!(
+        src.contains("#pad(left: 1.5em)"),
+        "def list detail padded: {src}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,7 +535,10 @@ fn snapshot_math_aligned_env() {
         "$$\\begin{align} a &= b + c \\\\ d &= e + f \\end{align}$$\n",
     );
     // align environment produces at least something non-empty
-    assert!(src.contains("$ ") && src.contains(" $"), "display math: {src}");
+    assert!(
+        src.contains("$ ") && src.contains(" $"),
+        "display math: {src}"
+    );
 }
 
 #[test]
@@ -513,10 +564,7 @@ fn snapshot_math_greek_full() {
 
 #[test]
 fn snapshot_math_operators() {
-    let src = snapshot(
-        "math_operators",
-        "$a \\leq b \\geq c \\neq d \\approx e$\n",
-    );
+    let src = snapshot("math_operators", "$a \\leq b \\geq c \\neq d \\approx e$\n");
     assert!(src.contains("lt.eq"), "leq: {src}");
     assert!(src.contains("gt.eq"), "geq: {src}");
     assert!(src.contains("eq.not"), "neq: {src}");
@@ -566,15 +614,15 @@ fn snapshot_mixed_list_types() {
     );
     assert!(src.contains("- Category A"), "bullet A: {src}");
     assert!(src.contains("- Category B"), "bullet B: {src}");
-    assert!(src.contains("+ Sub one") || src.contains("Sub one"), "sub item: {src}");
+    assert!(
+        src.contains("+ Sub one") || src.contains("Sub one"),
+        "sub item: {src}"
+    );
 }
 
 #[test]
 fn snapshot_ordered_list_start_5() {
-    let src = snapshot(
-        "ordered_list_start_5",
-        "5. Fifth\n6. Sixth\n7. Seventh\n",
-    );
+    let src = snapshot("ordered_list_start_5", "5. Fifth\n6. Sixth\n7. Seventh\n");
     assert!(
         src.contains("start: 5") || src.contains("#set enum(start: 5)"),
         "start:5 directive: {src}"
@@ -606,7 +654,10 @@ fn snapshot_table_formatted_cells() {
     );
     assert!(src.contains("#table("), "table: {src}");
     // Cell content with formatting
-    assert!(src.contains("Bold") || src.contains("#strong["), "bold in cell: {src}");
+    assert!(
+        src.contains("Bold") || src.contains("#strong["),
+        "bold in cell: {src}"
+    );
 }
 
 #[test]
@@ -718,7 +769,10 @@ fn snapshot_inline_math_in_table() {
     assert!(src.contains("#table("), "table: {src}");
     // Math expressions should appear in cell content
     assert!(src.contains("$x^2$") || src.contains("x^2"), "x^2: {src}");
-    assert!(src.contains("sqrt(") || src.contains("\\sqrt"), "sqrt: {src}");
+    assert!(
+        src.contains("sqrt(") || src.contains("\\sqrt"),
+        "sqrt: {src}"
+    );
 }
 
 #[test]
@@ -732,8 +786,7 @@ fn snapshot_comprehensive_gfm() {
     config.toc_explicit = false;
     let src = md_to_typst(&md, &config).unwrap();
 
-    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/snapshots");
+    let snap_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snapshots");
     std::fs::create_dir_all(&snap_dir).ok();
     let snap_path = snap_dir.join("comprehensive_gfm.typ");
     if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !snap_path.exists() {

@@ -1,25 +1,23 @@
-/// Raw HTML → Typst translation.
-///
-/// Comrak exposes raw HTML as opaque strings for two node types:
-///   - `HtmlInline`  – a tag fragment inside a paragraph, e.g. `<br>` or `<sup>text</sup>`
-///   - `HtmlBlock`   – one or more complete block-level elements
-///
-/// We parse these strings with a lightweight hand-rolled scanner (zero extra deps)
-/// and map the most common tags to equivalent Typst markup.  Unsupported or unsafe
-/// tags are stripped; their text content is passed through where applicable.
-///
-/// # Supported inline tags
-/// `<br>`, `<wbr>`, `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`,
-/// `<ins>`, `<mark>`, `<small>`, `<sub>`, `<sup>`, `<code>`, `<kbd>`,
-/// `<samp>`, `<var>`, `<span>`, `<a href="…">`, `<abbr>`, `<cite>`, `<dfn>`,
-/// `<q>`, `<time>`, `<data>`
-///
-/// # Supported block tags
-/// `<p>`, `<div>`, `<section>`, `<article>`, `<main>`, `<header>`,
-/// `<footer>`, `<nav>`, `<aside>`, `<blockquote>`, `<hr>`, `<br>`,
-/// `<pre>` (with inner `<code>`), `<ul>`, `<ol>`, `<li>`, `<dl>`, `<dt>`,
-/// `<dd>`, `<img>`, `<figure>`, `<figcaption>`, `<table>`, `<thead>`,
-/// `<tbody>`, `<tfoot>`, `<tr>`, `<th>`, `<td>`, `<details>`, `<summary>`
+//! Raw HTML → Typst translation.
+//!
+//! Comrak exposes raw HTML as opaque strings for two node types:
+//!   - `HtmlInline`  – a tag fragment inside a paragraph, e.g. `<br>` or `<sup>text</sup>`
+//!   - `HtmlBlock`   – one or more complete block-level elements
+//!
+//! We parse these strings with a lightweight hand-rolled scanner (zero extra deps)
+//! and map the most common tags to equivalent Typst markup.  Unsupported or unsafe
+//! tags are stripped; their text content is passed through where applicable.
+//!
+//! Supported inline tags: `<br>`, `<wbr>`, `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`,
+//! `<s>`, `<del>`, `<ins>`, `<mark>`, `<small>`, `<sub>`, `<sup>`, `<code>`, `<kbd>`,
+//! `<samp>`, `<var>`, `<span>`, `<a href="…">`, `<abbr>`, `<cite>`, `<dfn>`,
+//! `<q>`, `<time>`, `<data>`
+//!
+//! Supported block tags: `<p>`, `<div>`, `<section>`, `<article>`, `<main>`, `<header>`,
+//! `<footer>`, `<nav>`, `<aside>`, `<blockquote>`, `<hr>`, `<br>`,
+//! `<pre>` (with inner `<code>`), `<ul>`, `<ol>`, `<li>`, `<dl>`, `<dt>`,
+//! `<dd>`, `<img>`, `<figure>`, `<figcaption>`, `<table>`, `<thead>`,
+//! `<tbody>`, `<tfoot>`, `<tr>`, `<th>`, `<td>`, `<details>`, `<summary>`
 
 // ─── Public entry points ─────────────────────────────────────────────────────
 
@@ -28,7 +26,10 @@
 #[derive(Debug)]
 pub enum InlineTag {
     /// `<tag attr="val">` — opens a paired tag.
-    Open { name: String, attrs: Vec<(String, String)> },
+    Open {
+        name: String,
+        attrs: Vec<(String, String)>,
+    },
     /// `</tag>` — closes a previously opened tag.
     Close { name: String },
     /// `<tag />` or a void element like `<br>`.
@@ -61,14 +62,14 @@ pub fn is_void_inline(name: &str) -> bool {
 pub fn inline_tag_to_typst(name: &str, attrs: &[(String, String)]) -> (String, String) {
     match name {
         "b" | "strong" => ("#strong[".to_string(), "]".to_string()),
-        "i" | "em"     => ("#emph[".to_string(),   "]".to_string()),
-        "u"            => ("#underline[".to_string(), "]".to_string()),
-        "s" | "del"    => ("#strike[".to_string(), "]".to_string()),
-        "ins"          => ("#underline[".to_string(), "]".to_string()),
-        "mark"         => ("#highlight[".to_string(), "]".to_string()),
-        "small"        => ("#text(size: 0.8em)[".to_string(), "]".to_string()),
-        "sub"          => ("#sub[".to_string(), "]".to_string()),
-        "sup"          => ("#super[".to_string(), "]".to_string()),
+        "i" | "em" => ("#emph[".to_string(), "]".to_string()),
+        "u" => ("#underline[".to_string(), "]".to_string()),
+        "s" | "del" => ("#strike[".to_string(), "]".to_string()),
+        "ins" => ("#underline[".to_string(), "]".to_string()),
+        "mark" => ("#highlight[".to_string(), "]".to_string()),
+        "small" => ("#text(size: 0.8em)[".to_string(), "]".to_string()),
+        "sub" => ("#sub[".to_string(), "]".to_string()),
+        "sup" => ("#super[".to_string(), "]".to_string()),
         // Inline monospace — use raw block with backtick delimiter.
         // We use #raw() call form to avoid delimiter collision issues.
         "code" | "kbd" | "samp" | "var" => ("#raw(\"".to_string(), "\")".to_string()),
@@ -76,13 +77,17 @@ pub fn inline_tag_to_typst(name: &str, attrs: &[(String, String)]) -> (String, S
             ("#emph[".to_string(), "]".to_string())
         }
         "span" => {
-            let style = attrs.iter().find(|(k, _)| k == "style")
+            let style = attrs
+                .iter()
+                .find(|(k, _)| k == "style")
                 .map(|(_, v)| v.as_str())
                 .unwrap_or("");
             style_to_typst_span(style)
         }
         "a" => {
-            let href = attrs.iter().find(|(k, _)| k == "href")
+            let href = attrs
+                .iter()
+                .find(|(k, _)| k == "href")
                 .map(|(_, v)| v.as_str())
                 .unwrap_or("");
             if href.is_empty() {
@@ -128,9 +133,15 @@ enum Token {
     /// Raw character data between tags.
     Text(String),
     /// Opening tag with name and attributes.
-    Open { name: String, attrs: Vec<(String, String)> },
+    Open {
+        name: String,
+        attrs: Vec<(String, String)>,
+    },
     /// Self-closing tag (`<br />`, `<img … />`).
-    SelfClose { name: String, attrs: Vec<(String, String)> },
+    SelfClose {
+        name: String,
+        attrs: Vec<(String, String)>,
+    },
     /// Closing tag.
     Close { name: String },
     /// HTML comment or DOCTYPE – ignored.
@@ -188,18 +199,27 @@ fn tokenize(input: &str) -> Vec<Token> {
             loop {
                 skip_whitespace(bytes, &mut i);
                 if i >= len || bytes[i] == b'>' {
-                    if i < len { i += 1; }
+                    if i < len {
+                        i += 1;
+                    }
                     break;
                 }
                 if bytes[i] == b'/' {
                     self_close = true;
                     i += 1;
-                    if i < len && bytes[i] == b'>' { i += 1; }
+                    if i < len && bytes[i] == b'>' {
+                        i += 1;
+                    }
                     break;
                 }
                 // Attribute name
                 let attr_start = i;
-                while i < len && bytes[i] != b'=' && bytes[i] != b'>' && bytes[i] != b'/' && !bytes[i].is_ascii_whitespace() {
+                while i < len
+                    && bytes[i] != b'='
+                    && bytes[i] != b'>'
+                    && bytes[i] != b'/'
+                    && !bytes[i].is_ascii_whitespace()
+                {
                     i += 1;
                 }
                 let attr_name = input[attr_start..i].to_ascii_lowercase();
@@ -239,8 +259,23 @@ fn is_tag_name_char(b: u8) -> bool {
 }
 
 fn is_void_element(name: &str) -> bool {
-    matches!(name, "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input"
-        | "link" | "meta" | "param" | "source" | "track" | "wbr")
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 fn skip_whitespace(bytes: &[u8], i: &mut usize) {
@@ -261,7 +296,9 @@ fn parse_attr_value(bytes: &[u8], i: &mut usize, input: &str) -> String {
             *i += 1;
         }
         let val = input[start..*i].to_string();
-        if *i < bytes.len() { *i += 1; } // skip closing quote
+        if *i < bytes.len() {
+            *i += 1;
+        } // skip closing quote
         decode_entities(&val)
     } else {
         let start = *i;
@@ -294,28 +331,32 @@ fn decode_entities(s: &str) -> String {
         if ch == '&' {
             let mut entity = String::new();
             for c in chars.by_ref() {
-                if c == ';' { break; }
+                if c == ';' {
+                    break;
+                }
                 entity.push(c);
             }
             match entity.as_str() {
-                "amp"   => out.push('&'),
-                "lt"    => out.push('<'),
-                "gt"    => out.push('>'),
-                "quot"  => out.push('"'),
-                "apos"  => out.push('\''),
-                "nbsp"  => out.push('\u{00A0}'),
+                "amp" => out.push('&'),
+                "lt" => out.push('<'),
+                "gt" => out.push('>'),
+                "quot" => out.push('"'),
+                "apos" => out.push('\''),
+                "nbsp" => out.push('\u{00A0}'),
                 "mdash" => out.push('—'),
                 "ndash" => out.push('–'),
                 "laquo" => out.push('«'),
                 "raquo" => out.push('»'),
-                "copy"  => out.push('©'),
-                "reg"   => out.push('®'),
+                "copy" => out.push('©'),
+                "reg" => out.push('®'),
                 "trade" => out.push('™'),
-                "hellip"=> out.push('…'),
+                "hellip" => out.push('…'),
                 other => {
                     // Numeric references: &#123; or &#x7B;
                     if let Some(rest) = other.strip_prefix('#') {
-                        let code_point = if let Some(hex) = rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
+                        let code_point = if let Some(hex) =
+                            rest.strip_prefix('x').or_else(|| rest.strip_prefix('X'))
+                        {
                             u32::from_str_radix(hex, 16).ok()
                         } else {
                             rest.parse::<u32>().ok()
@@ -416,7 +457,9 @@ fn render_self_closing(name: &str, attrs: &[(String, String)], _state: &mut Rend
 }
 
 fn render_img_tag(attrs: &[(String, String)]) -> String {
-    use crate::renderer::{ImageInfo, SizeHint, css_length_to_typst, format_image_typst_sized, missing_image_fallback};
+    use crate::renderer::{
+        ImageInfo, SizeHint, css_length_to_typst, format_image_typst_sized, missing_image_fallback,
+    };
 
     let src = attr(attrs, "src").unwrap_or_default();
     let alt = attr(attrs, "alt").unwrap_or_default();
@@ -460,18 +503,23 @@ fn render_img_tag(attrs: &[(String, String)]) -> String {
 
 // ── Open / close tags ─────────────────────────────────────────────────────────
 
-fn render_open_tag(name: &str, attrs: &[(String, String)], state: &mut RenderState, out: &mut String) {
+fn render_open_tag(
+    name: &str,
+    attrs: &[(String, String)],
+    state: &mut RenderState,
+    out: &mut String,
+) {
     match name {
         // ── Inline formatting ──────────────────────────────────────────────────
         "b" | "strong" => push_inline_wrap(state, out, name, "#strong[", "]"),
-        "i" | "em"     => push_inline_wrap(state, out, name, "#emph[", "]"),
-        "u"            => push_inline_wrap(state, out, name, "#underline[", "]"),
-        "s" | "del"    => push_inline_wrap(state, out, name, "#strike[", "]"),
-        "ins"          => push_inline_wrap(state, out, name, "#underline[", "]"),
-        "mark"         => push_inline_wrap(state, out, name, "#highlight[", "]"),
-        "small"        => push_inline_wrap(state, out, name, "#text(size: 0.8em)[", "]"),
-        "sub"          => push_inline_wrap(state, out, name, "#sub[", "]"),
-        "sup"          => push_inline_wrap(state, out, name, "#super[", "]"),
+        "i" | "em" => push_inline_wrap(state, out, name, "#emph[", "]"),
+        "u" => push_inline_wrap(state, out, name, "#underline[", "]"),
+        "s" | "del" => push_inline_wrap(state, out, name, "#strike[", "]"),
+        "ins" => push_inline_wrap(state, out, name, "#underline[", "]"),
+        "mark" => push_inline_wrap(state, out, name, "#highlight[", "]"),
+        "small" => push_inline_wrap(state, out, name, "#text(size: 0.8em)[", "]"),
+        "sub" => push_inline_wrap(state, out, name, "#sub[", "]"),
+        "sup" => push_inline_wrap(state, out, name, "#super[", "]"),
         "code" | "kbd" | "samp" | "var" => {
             if state.in_pre {
                 // Inside <pre> the content is already verbatim — just pass through.
@@ -506,7 +554,9 @@ fn render_open_tag(name: &str, attrs: &[(String, String)], state: &mut RenderSta
             push_block_wrap(state, out, name, "", "\n\n")
         }
         "blockquote" => push_block_wrap(
-            state, out, name,
+            state,
+            out,
+            name,
             "#block(inset: (left: 12pt), stroke: (left: 1pt + luma(180)))[\n",
             "\n]\n\n",
         ),
@@ -515,7 +565,9 @@ fn render_open_tag(name: &str, attrs: &[(String, String)], state: &mut RenderSta
         "pre" => {
             state.in_pre = true;
             push_block_wrap(
-                state, out, name,
+                state,
+                out,
+                name,
                 "#block(fill: luma(245), inset: 10pt, radius: 4pt)[#text(font: (\"DejaVu Sans Mono\",), size: 10pt)[\n",
                 "\n]]\n\n",
             );
@@ -540,7 +592,9 @@ fn render_open_tag(name: &str, attrs: &[(String, String)], state: &mut RenderSta
         // ── Table ──────────────────────────────────────────────────────────────
         // Full table structure is complex; we accumulate a simple grid.
         "table" => push_block_wrap(
-            state, out, name,
+            state,
+            out,
+            name,
             "#table(columns: 1, stroke: luma(180), inset: 6pt, align: left,\n",
             "\n)\n\n",
         ),
@@ -551,13 +605,21 @@ fn render_open_tag(name: &str, attrs: &[(String, String)], state: &mut RenderSta
 
         // ── Figure ────────────────────────────────────────────────────────────
         "figure" => push_block_wrap(state, out, name, "", "\n\n"),
-        "figcaption" => push_block_wrap(state, out, name, "#text(size: 0.9em, style: \"italic\")[", "]\n"),
+        "figcaption" => push_block_wrap(
+            state,
+            out,
+            name,
+            "#text(size: 0.9em, style: \"italic\")[",
+            "]\n",
+        ),
 
         // ── Details / summary ─────────────────────────────────────────────────
         "details" => {
             state.details_summary = None;
             push_block_wrap(
-                state, out, name,
+                state,
+                out,
+                name,
                 "#block(stroke: 1pt + luma(180), inset: 8pt, radius: 4pt)[\n",
                 "\n]\n\n",
             );
@@ -598,7 +660,13 @@ fn render_close_tag(name: &str, state: &mut RenderState, out: &mut String) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn push_inline_wrap(state: &mut RenderState, out: &mut String, tag: &str, prefix: &str, suffix: &str) {
+fn push_inline_wrap(
+    state: &mut RenderState,
+    out: &mut String,
+    tag: &str,
+    prefix: &str,
+    suffix: &str,
+) {
     out.push_str(prefix);
     state.open_blocks.push(OpenBlock {
         tag: tag.to_string(),
@@ -606,7 +674,13 @@ fn push_inline_wrap(state: &mut RenderState, out: &mut String, tag: &str, prefix
     });
 }
 
-fn push_block_wrap(state: &mut RenderState, out: &mut String, tag: &str, prefix: &str, suffix: &str) {
+fn push_block_wrap(
+    state: &mut RenderState,
+    out: &mut String,
+    tag: &str,
+    prefix: &str,
+    suffix: &str,
+) {
     out.push_str(prefix);
     state.open_blocks.push(OpenBlock {
         tag: tag.to_string(),
@@ -634,18 +708,9 @@ fn style_to_typst_span(style: &str) -> (String, String) {
     }
 
     match (color, font_size) {
-        (Some(c), Some(s)) => (
-            format!("#text(fill: {c}, size: {s})["),
-            "]".to_string(),
-        ),
-        (Some(c), None) => (
-            format!("#text(fill: {c})["),
-            "]".to_string(),
-        ),
-        (None, Some(s)) => (
-            format!("#text(size: {s})["),
-            "]".to_string(),
-        ),
+        (Some(c), Some(s)) => (format!("#text(fill: {c}, size: {s})["), "]".to_string()),
+        (Some(c), None) => (format!("#text(fill: {c})["), "]".to_string()),
+        (None, Some(s)) => (format!("#text(size: {s})["), "]".to_string()),
         (None, None) => (String::new(), String::new()),
     }
 }
@@ -656,17 +721,17 @@ fn css_color_to_typst(val: &str) -> String {
     let v = val.trim().to_ascii_lowercase();
     // Named colours
     let named = match v.as_str() {
-        "red"    => Some("red"),
-        "green"  => Some("green"),
-        "blue"   => Some("blue"),
-        "white"  => Some("white"),
-        "black"  => Some("black"),
+        "red" => Some("red"),
+        "green" => Some("green"),
+        "blue" => Some("blue"),
+        "white" => Some("white"),
+        "black" => Some("black"),
         "gray" | "grey" => Some("gray"),
         "orange" => Some("orange"),
         "purple" => Some("purple"),
         "yellow" => Some("yellow"),
-        "pink"   => Some("rgb(\"#ffc0cb\")"),
-        _        => None,
+        "pink" => Some("rgb(\"#ffc0cb\")"),
+        _ => None,
     };
     if let Some(n) = named {
         return n.to_string();
@@ -678,14 +743,14 @@ fn css_color_to_typst(val: &str) -> String {
     // rgb(r, g, b)
     if let Some(inner) = v.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').collect();
-        if parts.len() == 3 {
-            if let (Ok(r), Ok(g), Ok(b)) = (
+        if parts.len() == 3
+            && let (Ok(r), Ok(g), Ok(b)) = (
                 parts[0].trim().parse::<u8>(),
                 parts[1].trim().parse::<u8>(),
                 parts[2].trim().parse::<u8>(),
-            ) {
-                return format!("rgb(\"#{:02x}{:02x}{:02x}\")", r, g, b);
-            }
+            )
+        {
+            return format!("rgb(\"#{:02x}{:02x}{:02x}\")", r, g, b);
         }
     }
     // Fallback
@@ -707,8 +772,11 @@ fn css_size_to_typst(val: &str) -> String {
     }
 }
 
-fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<String> {
-    attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+fn attr(attrs: &[(String, String)], name: &str) -> Option<String> {
+    attrs
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
 }
 
 // ─── Typst escaping ───────────────────────────────────────────────────────────
@@ -793,7 +861,10 @@ mod tests {
         assert_eq!(tokens.len(), 3);
         if let Token::Open { name, attrs } = &tokens[0] {
             assert_eq!(name, "a");
-            assert_eq!(attrs[0], ("href".to_string(), "https://example.com".to_string()));
+            assert_eq!(
+                attrs[0],
+                ("href".to_string(), "https://example.com".to_string())
+            );
         } else {
             panic!("expected Open token");
         }
@@ -839,7 +910,9 @@ mod tests {
         stack: Vec<(String, String)>, // (tag, suffix)
     }
     impl FakeRenderer {
-        fn new() -> Self { Self { stack: Vec::new() } }
+        fn new() -> Self {
+            Self { stack: Vec::new() }
+        }
         fn handle(&mut self, html: &str) -> String {
             match parse_inline_tag(html) {
                 InlineTag::SelfClose { ref name } | InlineTag::Open { ref name, .. }
@@ -860,7 +933,9 @@ mod tests {
                     if let Some(pos) = self.stack.iter().rposition(|(t, _)| *t == name) {
                         let mut out = String::new();
                         let inner: Vec<_> = self.stack.drain(pos + 1..).collect();
-                        for (_, suf) in inner.into_iter().rev() { out.push_str(&suf); }
+                        for (_, suf) in inner.into_iter().rev() {
+                            out.push_str(&suf);
+                        }
                         let (_, suf) = self.stack.remove(pos);
                         out.push_str(&suf);
                         out
@@ -895,18 +970,28 @@ mod tests {
     #[test]
     fn inline_em() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}",
-            r.handle("<em>"), escape_typst_text("world"), r.handle("</em>"));
+        let out = format!(
+            "{}{}{}",
+            r.handle("<em>"),
+            escape_typst_text("world"),
+            r.handle("</em>")
+        );
         assert_eq!(out, "#emph[world]");
     }
 
     #[test]
     fn inline_b_and_i() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}{}{}{}{}",
-            r.handle("<b>"), escape_typst_text("bold"), r.handle("</b>"),
+        let out = format!(
+            "{}{}{}{}{}{}{}",
+            r.handle("<b>"),
+            escape_typst_text("bold"),
+            r.handle("</b>"),
             escape_typst_text(" and "),
-            r.handle("<i>"), escape_typst_text("italic"), r.handle("</i>"));
+            r.handle("<i>"),
+            escape_typst_text("italic"),
+            r.handle("</i>")
+        );
         assert!(out.contains("#strong[bold]"), "got: {out}");
         assert!(out.contains("#emph[italic]"), "got: {out}");
     }
@@ -914,32 +999,62 @@ mod tests {
     #[test]
     fn inline_sup_sub() {
         let mut r = FakeRenderer::new();
-        let sup = format!("{}{}{}", r.handle("<sup>"), escape_typst_text("2"), r.handle("</sup>"));
+        let sup = format!(
+            "{}{}{}",
+            r.handle("<sup>"),
+            escape_typst_text("2"),
+            r.handle("</sup>")
+        );
         assert_eq!(sup, "#super[2]");
-        let sub = format!("{}{}{}", r.handle("<sub>"), escape_typst_text("n"), r.handle("</sub>"));
+        let sub = format!(
+            "{}{}{}",
+            r.handle("<sub>"),
+            escape_typst_text("n"),
+            r.handle("</sub>")
+        );
         assert_eq!(sub, "#sub[n]");
     }
 
     #[test]
     fn inline_u_and_s() {
         let mut r = FakeRenderer::new();
-        let u = format!("{}{}{}", r.handle("<u>"), escape_typst_text("underline"), r.handle("</u>"));
+        let u = format!(
+            "{}{}{}",
+            r.handle("<u>"),
+            escape_typst_text("underline"),
+            r.handle("</u>")
+        );
         assert_eq!(u, "#underline[underline]");
-        let s = format!("{}{}{}", r.handle("<s>"), escape_typst_text("strike"), r.handle("</s>"));
+        let s = format!(
+            "{}{}{}",
+            r.handle("<s>"),
+            escape_typst_text("strike"),
+            r.handle("</s>")
+        );
         assert_eq!(s, "#strike[strike]");
     }
 
     #[test]
     fn inline_mark() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}", r.handle("<mark>"), escape_typst_text("highlighted"), r.handle("</mark>"));
+        let out = format!(
+            "{}{}{}",
+            r.handle("<mark>"),
+            escape_typst_text("highlighted"),
+            r.handle("</mark>")
+        );
         assert_eq!(out, "#highlight[highlighted]");
     }
 
     #[test]
     fn inline_small() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}", r.handle("<small>"), escape_typst_text("tiny"), r.handle("</small>"));
+        let out = format!(
+            "{}{}{}",
+            r.handle("<small>"),
+            escape_typst_text("tiny"),
+            r.handle("</small>")
+        );
         assert_eq!(out, "#text(size: 0.8em)[tiny]");
     }
 
@@ -955,15 +1070,28 @@ mod tests {
     #[test]
     fn inline_a_with_href() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}", r.handle("<a href=\"https://rust-lang.org\">"), escape_typst_text("Rust"), r.handle("</a>"));
-        assert!(out.contains("#link(\"https://rust-lang.org\", ["), "got: {out}");
+        let out = format!(
+            "{}{}{}",
+            r.handle("<a href=\"https://rust-lang.org\">"),
+            escape_typst_text("Rust"),
+            r.handle("</a>")
+        );
+        assert!(
+            out.contains("#link(\"https://rust-lang.org\", ["),
+            "got: {out}"
+        );
         assert!(out.contains("Rust"), "got: {out}");
     }
 
     #[test]
     fn inline_span_color() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}", r.handle("<span style=\"color: red\">"), escape_typst_text("alert"), r.handle("</span>"));
+        let out = format!(
+            "{}{}{}",
+            r.handle("<span style=\"color: red\">"),
+            escape_typst_text("alert"),
+            r.handle("</span>")
+        );
         assert!(out.contains("#text(fill: red)["), "got: {out}");
         assert!(out.contains("alert"), "got: {out}");
     }
@@ -971,7 +1099,12 @@ mod tests {
     #[test]
     fn inline_span_font_size_px() {
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}", r.handle("<span style=\"font-size: 14px\">"), escape_typst_text("small"), r.handle("</span>"));
+        let out = format!(
+            "{}{}{}",
+            r.handle("<span style=\"font-size: 14px\">"),
+            escape_typst_text("small"),
+            r.handle("</span>")
+        );
         assert!(out.contains("#text(size: 14pt)["), "got: {out}");
     }
 
@@ -979,7 +1112,8 @@ mod tests {
     fn inline_nested() {
         // <b><em>bold-italic</em></b>
         let mut r = FakeRenderer::new();
-        let out = format!("{}{}{}{}{}",
+        let out = format!(
+            "{}{}{}{}{}",
             r.handle("<b>"),
             r.handle("<em>"),
             escape_typst_text("bold-italic"),
@@ -1049,7 +1183,8 @@ mod tests {
 
     #[test]
     fn block_details_summary() {
-        let out = block_html_to_typst("<details><summary>Click me</summary>Hidden content</details>");
+        let out =
+            block_html_to_typst("<details><summary>Click me</summary>Hidden content</details>");
         assert!(out.contains("#block(stroke"), "got: {out}");
         assert!(out.contains("Click me"), "got: {out}");
         assert!(out.contains("Hidden content"), "got: {out}");

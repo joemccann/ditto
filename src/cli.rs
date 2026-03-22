@@ -32,11 +32,31 @@ pub struct PresetValues {
 impl Preset {
     pub fn values(&self) -> PresetValues {
         match self {
-            Preset::A4 => PresetValues { width_mm: 210.0, height_mm: 297.0, margin_mm: 20.0 },
-            Preset::Letter => PresetValues { width_mm: 215.9, height_mm: 279.4, margin_mm: 20.0 },
-            Preset::A5 => PresetValues { width_mm: 148.0, height_mm: 210.0, margin_mm: 15.0 },
-            Preset::Legal => PresetValues { width_mm: 215.9, height_mm: 355.6, margin_mm: 20.0 },
-            Preset::Slides => PresetValues { width_mm: 338.0, height_mm: 190.0, margin_mm: 12.0 },
+            Preset::A4 => PresetValues {
+                width_mm: 210.0,
+                height_mm: 297.0,
+                margin_mm: 20.0,
+            },
+            Preset::Letter => PresetValues {
+                width_mm: 215.9,
+                height_mm: 279.4,
+                margin_mm: 20.0,
+            },
+            Preset::A5 => PresetValues {
+                width_mm: 148.0,
+                height_mm: 210.0,
+                margin_mm: 15.0,
+            },
+            Preset::Legal => PresetValues {
+                width_mm: 215.9,
+                height_mm: 355.6,
+                margin_mm: 20.0,
+            },
+            Preset::Slides => PresetValues {
+                width_mm: 338.0,
+                height_mm: 190.0,
+                margin_mm: 12.0,
+            },
         }
     }
 }
@@ -87,7 +107,7 @@ EXAMPLES
   base16-eighties.dark, base16-mocha.dark, Solarized (dark), Solarized (light)
 
 TIP: Run `md-to-pdf --doctor` to verify that required fonts are available \
-and that the Typst engine is working correctly.",
+and that the Typst engine is working correctly."
 )]
 pub struct Cli {
     // ── Positional ──────────────────────────────────────────────────────────
@@ -145,7 +165,12 @@ pub struct Cli {
     /// Built-in themes: InspiredGitHub (default), base16-ocean.dark,
     /// base16-ocean.light, base16-eighties.dark, base16-mocha.dark,
     /// Solarized (dark), Solarized (light)
-    #[arg(long, alias = "theme", value_name = "THEME", default_value = "InspiredGitHub")]
+    #[arg(
+        long,
+        alias = "theme",
+        value_name = "THEME",
+        default_value = "InspiredGitHub"
+    )]
     pub syntax_theme: String,
 
     // ── Table of contents ───────────────────────────────────────────────────
